@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
 from PIL import Image
-from sklearn.linear_model import LogisticRegression, LinearRegression
-import matplotlib.pyplot as plt
+from sklearn.linear_model import LogisticRegression
+import matplotlib.pyplot as plt  # noqa
 
 
 # LOAD TRAINING DATA
@@ -16,7 +16,7 @@ x1 = np.stack(df.band_1)
 x2 = np.stack(df.band_2)
 minimum = np.min([x1, x2])
 maximum = np.max([x1, x2])
-difference = (maximum - minimum) / 255.
+difference = (maximum - minimum)
 
 
 # IMAGE NORMS / STATS
@@ -31,17 +31,6 @@ for b in 'band_1', 'band_2':
     df[b + '_min'] = df[b].apply(np.min)
     df[b + '_mean'] = df[b].apply(np.mean)
     df[b + '_median'] = df[b].apply(np.median)
-
-
-for i in range(0):
-    arr1 = df.band_1[i]
-    arr2 = df.band_2[i]
-
-    img1 = Image.fromarray(arr1)
-    img1.show()
-
-    img2 = Image.fromarray(arr2)
-    img2.show()
 
 
 # logistic regression - baseline predictions:
@@ -60,7 +49,8 @@ print(lr.score(X, y))
 print()
 
 '''
-does it make sense to use an implied inc_angle? NO!
+does it make sense to use an interolated inc_angle? no.
+also, note that 100% of images w/ inc_angle == 'na' are class 0
 
 
 logistic regression with mean fill on inc_angle:
@@ -69,16 +59,25 @@ logistic regression with mean fill on inc_angle:
 logistic regression without inc_angle:
 0.6963840399
 
-fitting inc_angle by linear regression on these columns:
-['band_1_max', 'band_1_min', 'band_1_median', 'band_2_max',
- 'band_2_min', 'band_2_median', 'band_1_mean', 'band_2_mean']
-filled 133 values out of 1603
-double check len(p): 133
-
 logistic regression with LinearRegression fill:
 0.695137157107
 '''
 
 # prep image data for neural net:
 
-X = np.stack([x1, x2], axis=1)
+X = normalize(np.stack([x1, x2, np.subtract(x2, x1)], axis=1))
+
+# >>> X.shape
+# (1604, 3, 75, 75)
+y.reshape(-1, 1)
+
+
+# show some samples
+for i in range(1):
+    img1 = Image.fromarray(np.multiply(X[i][0], 255))
+    img1.show()
+    img2 = Image.fromarray(np.multiply(X[i][1], 255))
+    img2.show()
+    img3 = Image.fromarray(np.multiply(X[i][2], 255))
+    img3.show()
+
