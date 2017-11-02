@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 import torchvision
-import torchvision.transforms as transforms
+# import torchvision.transforms as transforms
 
 # LOAD TRAINING DATA
 
@@ -80,24 +80,32 @@ logistic regression with LinearRegression fill:
 X = normalize(np.stack([x1, x2, np.subtract(x2, x1)], axis=1))
 X = np.add(np.multiply(X, 2), -1)
 
-
 # >>> X.shape
 # (1604, 3, 75, 75)
 y.reshape(-1, 1)
+
+split = 1152
+
+X_train = X[:split]
+y_train = y[:split]
+X_test = X[split:]
+y_test = y[split:]
+
+# dtype = torch.FloatTensor
+dtype = torch.cuda.FloatTensor  # Uncomment this to run on GPU
 
 
 class ToTensor(object):
     """Convert ndarrays in sample to Tensors."""
 
     def __call__(self, sample):
-        image, target = sample['image'], sample['target']
+        image, target = sample
 
         # swap color axis because
         # numpy image: H x W x C
         # torch image: C X H X W
         # image = image.transpose((2, 0, 1))
-        return {'image': torch.from_numpy(image),
-                'target': torch.from_numpy(target)}
+        return torch.from_numpy(image), torch.from_numpy(target)
 
 
 class IcebergDataset(torch.utils.data.Dataset):
@@ -113,7 +121,7 @@ class IcebergDataset(torch.utils.data.Dataset):
         return len(self.X)
 
     def __getitem__(self, i):
-        sample = {'image': self.X[i], 'target': self.y[i].reshape(1, 1)}
+        sample = self.X[i], self.y[i].reshape(1, 1)
 
         if self.transform:
             self.transform(sample)
@@ -122,35 +130,44 @@ class IcebergDataset(torch.utils.data.Dataset):
 
     def show(self, i):
         # show some samples
-        arr = self.__getitem__(i)['image']
+        arr = self.__getitem__(i)[0]
         img = np.multiply(np.add(arr, 1), 127.5)
         for ch in range(img.shape[0]):
-            Image.fromarray(img[ch]).show()
+            # Image.fromarray(img[ch]).show()
+            plt.imshow(Image.fromarray(img[ch]))
+            plt.show()
 
 
-data = IcebergDataset(X, y, transform=transforms.Compose([
-    ToTensor()]))
+train_set = IcebergDataset(X_train, y_train, transform=ToTensor())
+test_set = IcebergDataset(X_test, y_test, transform=ToTensor())
 
-data.show(5)
+# dataset.show(5)
 
-dataloader = torch.utils.data.DataLoader(data, batch_size=32,
-                                         shuffle=True, num_workers=4)
+train_loader = torch.utils.data.DataLoader(train_set, batch_size=32,
+                                           shuffle=True, num_workers=4)
+
+test_loader = torch.utils.data.DataLoader(test_set, batch_size=32,
+                                          shuffle=True, num_workers=4)
 
 
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(3, 16, 5)
+        self.conv1 = nn.Conv2d(3, 6, 5)
         self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(16, 32, 5)
-        self.fc1 = nn.Linear(32 * 5 * 5, 256)
-        self.fc2 = nn.Linear(256, 84)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.conv3 = nn.Conv2d(16, 32, 5)
+
+        self.fc1 = nn.Linear(32 * 5 * 5, 120)
+        self.fc2 = nn.Linear(120, 84)
         self.fc3 = nn.Linear(84, 2)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
+        x = self.pool(F.relu(self.conv3(x)))
         x = x.view(-1, 32 * 5 * 5)
+        # print(x.size())
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
@@ -158,36 +175,76 @@ class Net(nn.Module):
 
 
 net = Net()
+net.float()
 
 
+# criterion = nn.LogSoftmax()
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+optimizer = optim.SGD(net.parameters(), lr=0.01, momentum=0.9)
 
 
-for epoch in range(2):  # loop over the dataset multiple times
+def train(n):
 
-    running_loss = 0.0
-    for i, data in enumerate(dataloader, 0):
-        # get the inputs
-        labels, inputs = data
+    for epoch in range(n):  # loop over the dataset multiple times
 
-        # wrap them in Variable
-        inputs, labels = Variable(inputs), Variable(labels)
+        running_loss = 0.0
+        for i, data in enumerate(train_loader, 0):
+            # get the inputs
+            image, target = data
 
-        # zero the parameter gradients
-        optimizer.zero_grad()
+            image = image.float()
+            target = target.view(-1)
+            # print('target:', target.size(), 'image', image.size())
 
-        # forward + backward + optimize
-        outputs = net(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+            # wrap them in Variable
+            image, target = Variable(image), Variable(target)
 
-        # print statistics
-        running_loss += loss.data[0]
-        if i % 2000 == 1999:    # print every 2000 mini-batches
-            print('[%d, %5d] loss: %.3f' %
-                  (epoch + 1, i + 1, running_loss / 2000))
-            running_loss = 0.0
+            # print(type(image), len(image), type(image[0]))
 
-print('Finished Training')
+            # zero the parameter gradients
+            optimizer.zero_grad()
+
+            # forward + backward + optimize
+            outputs = net(image)
+            # print(outputs.size())
+            loss = criterion(outputs, target)
+            loss.backward()
+            optimizer.step()
+
+            # print statistics
+            running_loss += loss.data[0]
+            if i == 35:    # print every 2000 mini-batches
+                print('[%d, %5d] loss: %.3f' %
+                      (epoch + 1, i + 1, running_loss / 35))
+
+        val_loss = 0.0
+
+        if epoch % 10 == 9:
+            print('\n## validation ## ')
+            correct, total = 0, 0
+            for i, data in enumerate(test_loader, 0):
+                # get the inputs
+                image, target = data
+
+                image = image.float()
+                target = target.view(-1)
+                # print('target:', target.size(), 'image', image.size())
+
+                # wrap them in Variable
+                image, target = Variable(image), Variable(target)
+                outputs = net(image)
+                loss = criterion(outputs, target)
+                _, preds = torch.max(outputs, 1)
+                # print(preds, target)
+                # return preds, target
+                correct += (preds == target).sum().float()
+                total += len(preds)
+
+                # print statistics
+                val_loss += loss.data[0]
+
+            print('[%d, %5d] validation loss: %.3f' %
+                  (epoch + 1, i + 1, val_loss / 14))
+            print('accuracy:', correct[0], 'of', total)
+
+    print('Finished Training')
