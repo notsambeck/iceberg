@@ -1,3 +1,5 @@
+import os
+
 import pandas as pd
 import numpy as np
 from PIL import Image
@@ -14,13 +16,13 @@ import torchvision
 
 # LOAD TRAINING DATA
 
-df = pd.read_json('data/train.json')
+imdata = pd.read_json('data/train.json')
 
 for b in 'band_1', 'band_2':
-    df[b] = df[b].apply(lambda x: np.array(x).reshape(75, 75))
+    imdata[b] = imdata[b].apply(lambda x: np.array(x).reshape(75, 75))
 
-x1 = np.stack(df.band_1)
-x2 = np.stack(df.band_2)
+x1 = np.stack(imdata.band_1)
+x2 = np.stack(imdata.band_2)
 minimum = np.min([x1, x2])
 maximum = np.max([x1, x2])
 difference = (maximum - minimum)
@@ -32,52 +34,61 @@ def normalize(arr):
     return np.divide(np.subtract(arr, minimum), difference)
 
 
-for b in 'band_1', 'band_2':
-    df[b] = df[b].apply(normalize)
-    df[b + '_max'] = df[b].apply(np.max)
-    df[b + '_min'] = df[b].apply(np.min)
-    df[b + '_mean'] = df[b].apply(np.mean)
-    df[b + '_median'] = df[b].apply(np.median)
+def make_stats_frame():
+    df = pd.DataFrame()
 
+    for b in 'band_1', 'band_2':
+        df[b] = imdata[b].apply(normalize)
+        df[b + '_max'] = imdata[b].apply(np.max)
+        df[b + '_min'] = imdata[b].apply(np.min)
+        df[b + '_mean'] = imdata[b].apply(np.mean)
+        df[b + '_median'] = imdata[b].apply(np.median)
+        df[b + '_coords'] = imdata[b].apply(
+            lambda x: np.unravel_index(np.argmax(x), x.shape))
+        df[b + '_x'] = df[b + '_coords'].apply(lambda x: x[0])
+        df[b + '_y'] = df[b + '_coords'].apply(lambda x: x[1])
+        df['is_iceberg'] = imdata.is_iceberg
+        df['inc_angle'] = imdata.inc_angle
+
+    return df
+
+
+df_path = 'data/stat_frame.csv'
+if os.path.exists(df_path):
+    df = pd.read_csv(df_path, index_col=0)
+else:
+    df = make_stats_frame()
+    df.to_csv(df_path)
 
 y = df.is_iceberg.values
 
-# logistic regression - baseline predictions:
-
 '''
-from sklearn.linear_model import LogisticRegression
+note that 100% of images w/ inc_angle == 'na' are class 0
 
+logistic regression - baseline predictions:
+
+from sklearn.linear_model import LogisticRegression
 cs = ['band_1_max', 'band_1_min', 'band_1_median', 'band_1_mean',
       'band_2_max', 'band_2_min', 'band_2_median', 'band_2_mean']
-
 X = df[cs].values
-
 lr = LogisticRegression()
 
 lr.fit(X, y)
-print('logistic regression baseline score w/o inc_angle:')
 print(lr.score(X, y))
-print()
 
 
 does it make sense to use an interolated inc_angle? no.
-also, note that 100% of images w/ inc_angle == 'na' are class 0
 
-
-logistic regression with mean fill on inc_angle:
-0.6963840399
-
-logistic regression without inc_angle:
-0.6963840399
-
-logistic regression with LinearRegression fill:
-0.695137157107
+logistic regression with mean fill on inc_angle: 0.6963840399
+logistic regression without inc_angle: 0.6963840399
+logistic regression with LinearRegression fill: 0.695137157107
 '''
 
 # prep image data for neural net
 # rescale to +/- 1
 
 X = normalize(np.stack([x1, x2, np.subtract(x2, x1)], axis=1))
+# X = normalize(np.stack([x1, x2], axis=1))
 X = np.add(np.multiply(X, 2), -1)
 
 # >>> X.shape
@@ -88,8 +99,11 @@ split = 1152
 
 X_train = X[:split]
 y_train = y[:split]
+df_train = df.iloc[:split]
 X_test = X[split:]
 y_test = y[split:]
+df_test = df.iloc[split:]
+
 
 # dtype = torch.FloatTensor
 dtype = torch.cuda.FloatTensor  # Uncomment this to run on GPU
@@ -110,12 +124,14 @@ class ToTensor(object):
 
 class IcebergDataset(torch.utils.data.Dataset):
     '''dataset containing icebergs for Kaggle comp'''
-    def __init__(self, X, y, transform=None):
+    def __init__(self, X, y, df, transform=None):
         # self.df = df
         self.X = X
         self.y = y
+        self.df = df
         self.transform = transform
         assert len(self.X) == len(self.y)  # == len(self.df)
+        self.n = len(self.X)
 
     def __len__(self):
         return len(self.X)
@@ -128,18 +144,41 @@ class IcebergDataset(torch.utils.data.Dataset):
 
         return sample
 
-    def show(self, i):
+    def show(self, n, rows=2, rando=True):
         # show some samples
-        arr = self.__getitem__(i)[0]
-        img = np.multiply(np.add(arr, 1), 127.5)
-        for ch in range(img.shape[0]):
-            # Image.fromarray(img[ch]).show()
-            plt.imshow(Image.fromarray(img[ch]))
-            plt.show()
+        channels = self.X.shape[1]
+        fig, axes = plt.subplots(channels*rows, n)
+        for row in range(rows):
+            for i in range(n):
+                # pull an image
+                if rando:
+                    index = np.random.randint(0, self.n)
+                else:
+                    index = i
+
+                # get some data from df
+                arr, label = self.__getitem__(index)
+                angle = str(self.df.inc_angle.iloc[index])
+                crds = ' '.join([str(self.df.band_1_x[index]),
+                                 str(self.df.band_1_y[index]),
+                                 str(self.df.band_2_x[index]),
+                                 str(self.df.band_2_y[index])])
+                img = np.multiply(np.add(arr, 1), 127.5)
+                axes[row*channels, i].set_title(str(label)+str(index))
+                axes[row*channels+1, i].set_title(angle)
+                axes[row*channels+2, i].set_title(crds)
+
+                for ch in range(channels):
+                    # Image.fromarray(img[ch]).show()   # for PIL
+                    loc = ch + row*channels, i
+                    axes[loc].imshow(Image.fromarray(img[ch]))
+                    axes[loc].axis('off')
+                    axes[loc].title.set_fontsize(6)
+        plt.show()
 
 
-train_set = IcebergDataset(X_train, y_train, transform=ToTensor())
-test_set = IcebergDataset(X_test, y_test, transform=ToTensor())
+train_set = IcebergDataset(X_train, y_train, df_train, transform=ToTensor())
+test_set = IcebergDataset(X_test, y_test, df_test, transform=ToTensor())
 
 # dataset.show(5)
 
