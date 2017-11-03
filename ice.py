@@ -11,8 +11,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-import torchvision
-# import torchvision.transforms as transforms
+# import torchvision
+import torchvision.transforms as transforms
+import affine_transforms as af
 
 # LOAD TRAINING DATA
 
@@ -109,19 +110,6 @@ df_test = df.iloc[split:]
 dtype = torch.cuda.FloatTensor  # Uncomment this to run on GPU
 
 
-class ToTensor(object):
-    """Convert ndarrays in sample to Tensors."""
-
-    def __call__(self, sample):
-        image, target = sample
-
-        # swap color axis because
-        # numpy image: H x W x C
-        # torch image: C X H X W
-        # image = image.transpose((2, 0, 1))
-        return torch.from_numpy(image), torch.from_numpy(target)
-
-
 class IcebergDataset(torch.utils.data.Dataset):
     '''dataset containing icebergs for Kaggle comp'''
     def __init__(self, X, y, df, transform=None):
@@ -137,12 +125,13 @@ class IcebergDataset(torch.utils.data.Dataset):
         return len(self.X)
 
     def __getitem__(self, i):
-        sample = self.X[i], self.y[i].reshape(1, 1)
+        x, y = self.X[i], self.y[i].reshape(1, 1)
+        x, y = torch.from_numpy(x).float(), y
 
         if self.transform:
-            self.transform(sample)
+            x = self.transform(x)
 
-        return sample
+        return x, y
 
     def show(self, n, rows=2, rando=True):
         # show some samples
@@ -158,27 +147,36 @@ class IcebergDataset(torch.utils.data.Dataset):
 
                 # get some data from df
                 arr, label = self.__getitem__(index)
+                arr = arr.numpy()
                 angle = str(self.df.inc_angle.iloc[index])
-                crds = ' '.join([str(self.df.band_1_x[index]),
-                                 str(self.df.band_1_y[index]),
-                                 str(self.df.band_2_x[index]),
-                                 str(self.df.band_2_y[index])])
+                coords = ' '.join([str(self.df.band_1_x[index]),
+                                   str(self.df.band_1_y[index]),
+                                   str(self.df.band_2_x[index]),
+                                   str(self.df.band_2_y[index])])
                 img = np.multiply(np.add(arr, 1), 127.5)
-                axes[row*channels, i].set_title(str(label)+str(index))
+                axes[row*channels, i].set_title(str(label)+' '+str(index))
                 axes[row*channels+1, i].set_title(angle)
-                axes[row*channels+2, i].set_title(crds)
+                axes[row*channels+2, i].set_title(coords)
 
                 for ch in range(channels):
                     # Image.fromarray(img[ch]).show()   # for PIL
                     loc = ch + row*channels, i
                     axes[loc].imshow(Image.fromarray(img[ch]))
                     axes[loc].axis('off')
-                    axes[loc].title.set_fontsize(6)
+                    axes[loc].title.set_fontsize(8)
         plt.show()
 
 
-train_set = IcebergDataset(X_train, y_train, df_train, transform=ToTensor())
-test_set = IcebergDataset(X_test, y_test, df_test, transform=ToTensor())
+trs = transforms.Compose([af.RandomRotate(60)])
+train_set = IcebergDataset(X_train,
+                           y_train,
+                           df_train,
+                           transform=trs)
+
+test_set = IcebergDataset(X_test,
+                          y_test,
+                          df_test,
+                          transform=None)
 
 # dataset.show(5)
 
