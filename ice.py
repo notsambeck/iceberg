@@ -52,10 +52,14 @@ _last_pred = {}
 imdata = pd.read_json('data/train.json')
 imdata.set_index('id', inplace=True)
 
+output_df = pd.read_json('data/test.json')
+output_df.set_index('id', inplace=True)
+
 # IMAGE NORMS / STATS
 
 for b in 'band_1', 'band_2':
     imdata[b] = imdata[b].apply(lambda x: np.array(x).reshape(75, 75))
+    output_df[b] = output_df[b].apply(lambda x: np.array(x).reshape(75, 75))
 
 x1 = np.stack(imdata.band_1)
 x2 = np.stack(imdata.band_2)
@@ -71,6 +75,7 @@ def normalize(arr):
 # store normalized data in df? yes
 for b in 'band_1', 'band_2':
     imdata[b] = imdata[b].apply(normalize)
+    output_df[b] = output_df[b].apply(normalize)
 
 
 def make_stats_frame(save=False):
@@ -120,7 +125,7 @@ print(X.shape)
 # (1604, 3, 75, 75)
 y.reshape(-1, 1)
 
-split = 32 * 44
+split = 32 * 48
 
 X_train = X[:split]
 y_train = y[:split]
@@ -131,6 +136,15 @@ y_test = y[split:]
 df_test = df.iloc[split:]
 
 
+# prep test data
+x1 = np.stack(output_df.band_1)
+x2 = np.stack(output_df.band_2)
+output_data = normalize(np.stack([x1, x2, np.subtract(x2, x1)], axis=1))
+output_data = np.add(np.multiply(X, 2), -1)
+# output_df
+print('test data', output_data.shape)
+
+
 # dtype = torch.FloatTensor
 dtype = torch.cuda.FloatTensor  # Uncomment this to run on GPU
 
@@ -139,31 +153,35 @@ class IcebergDataset(torch.utils.data.Dataset):
     '''dataset containing icebergs for Kaggle comp
     internally, df, X, and y are indexed by i as 0...n-1
     '''
-    def __init__(self, _X, _y, _df, transform=None, returnID=True):
+    def __init__(self, _X, _y, _df, transform=None, training=True):
         # self.df = df
         self.X = _X
-        self.y = _y
+        self.training = training
+        if self.training:
+            self.y = _y
+            assert len(self.X) == len(self.y)
         self.df = _df
         self.transform = transform
-        assert len(self.X) == len(self.y) == len(self.df)
+        assert len(self.X) == len(self.df)
         self.n = len(self.X)
-        self.returnID = returnID
         global _last_pred
 
     def __len__(self):
         return len(self.X)
 
     def __getitem__(self, i):
+        if not self.training:  # for test set:
+            x = self.X[i]
+            x = self.transform(x)
+            return x, self.df.index[i]  # data, id
+
         x, y = self.X[i], self.y[i].reshape(1, 1)
         x, y = torch.from_numpy(x).float(), y
 
         if self.transform:
             x = self.transform(x)
 
-        if self.returnID:
-            return x, y, self.df.index[i]   # iloc to avoid non-0 index
-        else:
-            return x, y
+        return x, y, self.df.index[i]   # iloc to avoid non-0 index
 
     def show(self, n, rando=True):
         # show approximately n samples
@@ -180,7 +198,12 @@ class IcebergDataset(torch.utils.data.Dataset):
                     index = row * cols + col
 
                 # get some data from df
-                arr, label, ID = self.__getitem__(index)
+                if self.training:
+                    arr, label, ID = self.__getitem__(index)
+                else:
+                    arr, ID = self.__getitem__(index)
+                    label = 'test'
+
                 p = str(_last_pred.get(ID))
                 arr = arr.numpy()
                 angle = str(self.df.angle.iloc[index])
@@ -216,23 +239,31 @@ train_set = IcebergDataset(X_train,
                            df_train,
                            transform=trs)
 
-test_set = IcebergDataset(X_test,
+xval_set = IcebergDataset(X_test,
                           y_test,
                           df_test,
                           transform=drop_low)
 
-eval_set = IcebergDataset(X, y, df, transform=None)
-
+output_dataset = IcebergDataset(output_data,
+                                None,
+                                output_df,
+                                training=False,
+                                transform=drop_low)
 # dataset.show(5)
 
 train_loader = torch.utils.data.DataLoader(train_set, batch_size=32,
                                            shuffle=True, num_workers=4)
 
-test_loader = torch.utils.data.DataLoader(test_set, batch_size=32,
+test_loader = torch.utils.data.DataLoader(xval_set, batch_size=32,
                                           shuffle=False, num_workers=4)
+output_loader = torch.utils.data.DataLoader(output_dataset, batch_size=32,
+                                            shuffle=False, num_workers=4)
 
+'''
+eval_set = IcebergDataset(X, y, df, transform=None)
 eval_loader = torch.utils.data.DataLoader(eval_set, batch_size=32,
                                           shuffle=False, num_workers=4)
+'''
 
 
 class Net(nn.Module):
