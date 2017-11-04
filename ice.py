@@ -41,6 +41,12 @@ import torch.optim as optim
 import torchvision.transforms as transforms
 import affine_transforms as af
 
+
+# dictionary that stores predictions to avoid changing dfs
+# {index: pred}
+_last_pred = {}
+
+
 # LOAD TRAINING DATA
 
 imdata = pd.read_json('data/train.json')
@@ -69,7 +75,7 @@ for b in 'band_1', 'band_2':
 
 def make_stats_frame(save=False):
     df = pd.DataFrame()
-    df['id'] = imdata.id
+    df['id'] = imdata.index
     df.set_index('id', inplace=True)
     df['is_iceberg'] = imdata.is_iceberg
     df['angle'] = imdata.inc_angle
@@ -104,9 +110,9 @@ y = df.is_iceberg.values
 # prep image data for neural net
 # rescale to +/- 1
 
-# X = normalize(np.stack([x1, x2, np.subtract(x2, x1)], axis=1))
 print('normalizing')
-X = normalize(np.stack([x1, x2], axis=1))
+# X = normalize(np.stack([x1, x2], axis=1))
+X = normalize(np.stack([x1, x2, np.subtract(x2, x1)], axis=1))
 X = np.add(np.multiply(X, 2), -1)
 print(X.shape)
 
@@ -129,8 +135,10 @@ dtype = torch.cuda.FloatTensor  # Uncomment this to run on GPU
 
 
 class IcebergDataset(torch.utils.data.Dataset):
-    '''dataset containing icebergs for Kaggle comp'''
-    def __init__(self, _X, _y, _df, transform=None, returnID=False):
+    '''dataset containing icebergs for Kaggle comp
+    internally, df, X, and y are indexed by i as 0...n-1
+    '''
+    def __init__(self, _X, _y, _df, transform=None, returnID=True):
         # self.df = df
         self.X = _X
         self.y = _y
@@ -139,6 +147,7 @@ class IcebergDataset(torch.utils.data.Dataset):
         assert len(self.X) == len(self.y) == len(self.df)
         self.n = len(self.X)
         self.returnID = returnID
+        global _last_pred
 
     def __len__(self):
         return len(self.X)
@@ -151,13 +160,13 @@ class IcebergDataset(torch.utils.data.Dataset):
             x = self.transform(x)
 
         if self.returnID:
-            return x, y, self.df.ID.iloc[i]   # iloc to avoid non-0 index
+            return x, y, self.df.index[i]   # iloc to avoid non-0 index
         else:
             return x, y
 
     def show(self, n, rows=2, rando=True):
         # show some samples
-        channels = self.X.shape[1]
+        channels = 3
         fig, axes = plt.subplots(channels*rows, n)
         for row in range(rows):
             for i in range(n):
@@ -168,24 +177,27 @@ class IcebergDataset(torch.utils.data.Dataset):
                     index = i
 
                 # get some data from df
-                arr, label = self.__getitem__(index)
+                arr, label, ID = self.__getitem__(index)
+                p = str(_last_pred.get(ID))
                 arr = arr.numpy()
-                angle = str(self.df.inc_angle.iloc[index])
+                angle = str(self.df.angle.iloc[index])
                 coords = ' '.join([str(self.df.band_1_x[index]),
                                    str(self.df.band_1_y[index]),
                                    str(self.df.band_2_x[index]),
                                    str(self.df.band_2_y[index])])
                 img = np.multiply(np.add(arr, 1), 127.5)
-                axes[row*channels, i].set_title(str(label)+' '+str(index))
+                axes[row*channels, i].set_title(str(label)+' - pred: '+p)
                 axes[row*channels+1, i].set_title(angle)
                 axes[row*channels+2, i].set_title(coords)
 
                 for ch in range(channels):
                     # Image.fromarray(img[ch]).show()   # for PIL
                     loc = ch + row*channels, i
-                    axes[loc].imshow(Image.fromarray(img[ch]))
                     axes[loc].axis('off')
                     axes[loc].title.set_fontsize(8)
+                    if ch < img.shape[0]:
+                        # print image if applicable
+                        axes[loc].imshow(Image.fromarray(img[ch]))
         plt.show()
 
 
@@ -198,10 +210,9 @@ train_set = IcebergDataset(X_train,
 test_set = IcebergDataset(X_test,
                           y_test,
                           df_test,
-                          transform=None,
-                          returnID=True)
+                          transform=None)
 
-eval_set = IcebergDataset(X, y, df, transform=None, returnID=True)
+eval_set = IcebergDataset(X, y, df, transform=None)
 
 # dataset.show(5)
 
@@ -216,10 +227,10 @@ eval_loader = torch.utils.data.DataLoader(eval_set, batch_size=32,
 
 
 class Net(nn.Module):
-    def __init__(self):
+    def __init__(self, channels):
         super(Net, self).__init__()
         # inputs, num filters, kernel size
-        self.conv1 = nn.Conv2d(2, 32, 5)
+        self.conv1 = nn.Conv2d(channels, 32, 5)
         self.drop0 = nn.Dropout2d()
         self.conv2 = nn.Conv2d(32, 16, 5)
         self.pool = nn.MaxPool2d(2, 2)
@@ -249,7 +260,7 @@ class Net(nn.Module):
         return x
 
 
-net = Net()
+net = Net(X.shape[1])
 net.float()
 net.cuda()
 
@@ -267,7 +278,7 @@ def train(n):
         net.training = True
         for i, data in enumerate(train_loader, 0):
             # get the inputs
-            image, target = data
+            image, target, ID = data
 
             image = image.cuda().float()
             target = target.view(-1)
@@ -329,8 +340,11 @@ def train(n):
 
 
 def write_preds(loader=test_loader):
-
-    cs = ['id', 'target', 'vals', 'preds']
+    '''
+    write predictions to _last_pred
+    '''
+    global _last_pred
+    cs = ['id', 'target', 'vals', 'pred']
     pred_df = pd.DataFrame(columns=cs)
     correct, total = 0, 0
     for i, data in enumerate(loader, 0):
@@ -338,23 +352,26 @@ def write_preds(loader=test_loader):
         image, target, ID = data
 
         image = image.cuda().float()
-        target = target.view(-1)
+        y = target.view(-1)
         # print('target:', target.size(), 'image', image.size())
 
         # wrap them in Variable
-        image, target = Variable(image.cuda()), Variable(target.cuda())
+        image, target = Variable(image.cuda()), Variable(y.cuda())
         outputs = net(image)
-        print(outputs)
         vals, preds = torch.max(outputs, 1)   # value, loc of value (argmax)
-        tdf = pd.DataFrame(columns=cs, index='id')
-        tdf['target'] = target
+        tdf = pd.DataFrame(columns=cs)
         tdf['id'] = ID
-        tdf['vals'] = vals
-        tdf['preds'] = preds
-        pred_df.append(tdf)
+        tdf['target'] = y
+        tdf['vals'] = outputs.cpu().data.numpy()
+        tdf['pred'] = preds.cpu().data.numpy()
+        # print(tdf.head())
+        pred_df = pred_df.append(tdf)
         # return preds, target
         correct += (preds == target).sum().float()
         total += len(preds)
 
     print('done')
+    pred_df.set_index('id', inplace=True)
+    for i in pred_df.index:
+        _last_pred[i] = pred_df.pred[i]
     return pred_df
