@@ -1,7 +1,7 @@
 '''
 icebergs
 
-all dataframes will be indexed to id
+dataframes and _last_pred indexed to id e.g. 'bc92da1'
 
 
 note that 100% of images w/ inc_angle == 'na' are class 0
@@ -42,7 +42,7 @@ import torchvision.transforms as transforms
 import affine_transforms as af
 
 
-# dictionary that stores predictions to avoid changing dfs
+# global dictionary that stores predictions to avoid altering dfs
 # {index: pred}
 _last_pred = {}
 
@@ -125,6 +125,7 @@ split = 32 * 44
 X_train = X[:split]
 y_train = y[:split]
 df_train = df.iloc[:split]
+
 X_test = X[split:]
 y_test = y[split:]
 df_test = df.iloc[split:]
@@ -164,17 +165,19 @@ class IcebergDataset(torch.utils.data.Dataset):
         else:
             return x, y
 
-    def show(self, n, rows=2, rando=True):
-        # show some samples
+    def show(self, n, rando=True):
+        # show approximately n samples
+        rows = int(n ** .3)
+        cols = int(n // rows)
         channels = 3
-        fig, axes = plt.subplots(channels*rows, n)
+        fig, axes = plt.subplots(channels*rows, cols)
         for row in range(rows):
-            for i in range(n):
+            for col in range(cols):
                 # pull an image
                 if rando:
                     index = np.random.randint(0, self.n)
                 else:
-                    index = i
+                    index = row * cols + col
 
                 # get some data from df
                 arr, label, ID = self.__getitem__(index)
@@ -186,13 +189,13 @@ class IcebergDataset(torch.utils.data.Dataset):
                                    str(self.df.band_2_x[index]),
                                    str(self.df.band_2_y[index])])
                 img = np.multiply(np.add(arr, 1), 127.5)
-                axes[row*channels, i].set_title(str(label)+' - pred: '+p)
-                axes[row*channels+1, i].set_title(angle)
-                axes[row*channels+2, i].set_title(coords)
+                axes[row*channels, col].set_title(str(label)+' - pred: '+p)
+                axes[row*channels+1, col].set_title(angle)
+                axes[row*channels+2, col].set_title(coords)
 
                 for ch in range(channels):
                     # Image.fromarray(img[ch]).show()   # for PIL
-                    loc = ch + row*channels, i
+                    loc = ch + row*channels, col
                     axes[loc].axis('off')
                     axes[loc].title.set_fontsize(8)
                     if ch < img.shape[0]:
@@ -201,7 +204,13 @@ class IcebergDataset(torch.utils.data.Dataset):
         plt.show()
 
 
-trs = transforms.Compose([af.RandomRotate(60)])
+def drop_low(x):
+    '''clip an image to values above median'''
+    median = torch.median(x)
+    return torch.clamp(x, min=median)
+
+
+trs = transforms.Compose([drop_low, af.RandomRotate(60)])
 train_set = IcebergDataset(X_train,
                            y_train,
                            df_train,
@@ -210,7 +219,7 @@ train_set = IcebergDataset(X_train,
 test_set = IcebergDataset(X_test,
                           y_test,
                           df_test,
-                          transform=None)
+                          transform=drop_low)
 
 eval_set = IcebergDataset(X, y, df, transform=None)
 
@@ -268,6 +277,12 @@ net.cuda()
 # criterion = nn.LogSoftmax()
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=0.015, momentum=0.9)
+
+
+def set_rate(rate):
+    global optimizer
+    optimizer = optim.SGD(net.parameters(), lr=rate, momentum=0.9)
+    return True
 
 
 def train(n):
@@ -344,7 +359,7 @@ def write_preds(loader=test_loader):
     write predictions to _last_pred
     '''
     global _last_pred
-    cs = ['id', 'target', 'vals', 'pred']
+    cs = ['id',  'val0', 'val1', 'target', 'pred']
     pred_df = pd.DataFrame(columns=cs)
     correct, total = 0, 0
     for i, data in enumerate(loader, 0):
@@ -358,11 +373,14 @@ def write_preds(loader=test_loader):
         # wrap them in Variable
         image, target = Variable(image.cuda()), Variable(y.cuda())
         outputs = net(image)
+        values = nn.Softmax()(outputs)
+        # print(outputs)
         vals, preds = torch.max(outputs, 1)   # value, loc of value (argmax)
         tdf = pd.DataFrame(columns=cs)
         tdf['id'] = ID
+        tdf['val0'] = values[:, 0].cpu().data.numpy()
+        tdf['val1'] = values[:, 1].cpu().data.numpy()
         tdf['target'] = y
-        tdf['vals'] = outputs.cpu().data.numpy()
         tdf['pred'] = preds.cpu().data.numpy()
         # print(tdf.head())
         pred_df = pred_df.append(tdf)
