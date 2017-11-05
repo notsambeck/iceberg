@@ -239,9 +239,9 @@ class Net(nn.Module):
     def __init__(self, channels):
         super(Net, self).__init__()
         # inputs, num filters, kernel size
-        self.conv1 = nn.Conv2d(channels, 32, 5)
+        self.conv1 = nn.Conv2d(channels, 16, 5)
         self.drop0 = nn.Dropout2d()
-        self.conv2 = nn.Conv2d(32, 16, 5)
+        self.conv2 = nn.Conv2d(16, 16, 5)
         self.pool = nn.MaxPool2d(2, 2)
         self.drop1 = nn.Dropout2d()
         self.conv3 = nn.Conv2d(16, 16, 5)
