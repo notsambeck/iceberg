@@ -28,54 +28,66 @@ import os
 
 import pandas as pd
 import numpy as np
-from PIL import Image
 import matplotlib.pyplot as plt  # noqa
 
 import torch
 from torch.autograd import Variable
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 
 # import torchvision
 import torchvision.transforms as transforms
 import affine_transforms as af
+from net_parameters import IcebergDataset, IceNet
+from ice_transforms import norm1, norm2, clip_low_except_center
+import pickle
 
 
 # global dictionary that stores predictions to avoid altering dfs
 # {index: pred}
 _last_pred = {}
+_last_prob = {}
 
 
 # LOAD TRAINING DATA
 
 imdata = pd.read_json('data/train.json')
+imdata.sort_values('id', inplace=True)
 imdata.set_index('id', inplace=True)
-
-output_df = pd.read_json('data/test.json')
-output_df.set_index('id', inplace=True)
 
 # IMAGE NORMS / STATS
 
 for b in 'band_1', 'band_2':
     imdata[b] = imdata[b].apply(lambda x: np.array(x).reshape(75, 75))
-    output_df[b] = output_df[b].apply(lambda x: np.array(x).reshape(75, 75))
 
 x1 = np.stack(imdata.band_1)
 x2 = np.stack(imdata.band_2)
-minimum = np.min([x1, x2])
-maximum = np.max([x1, x2])
-difference = (maximum - minimum)
 
 
-def normalize(arr):
-    return np.divide(np.subtract(arr, minimum), difference)
+# pickle stats here, OR load normalize from ice_transforms
+pkl = 'data/stats.pkl'
+if not os.path.exists(pkl):
+    min1 = np.min(x1)
+    max1 = np.max(x1)
+    min2 = np.min(x2)
+    max2 = np.max(x2)
+    with open(pkl, 'wb') as f:
+        pickle.dump(min1, f)
+        pickle.dump(max1, f)
+        pickle.dump(min2, f)
+        pickle.dump(max2, f)
+else:
+    with open(pkl, 'rb') as f:
+        min1 = pickle.load(f)
+        max1 = pickle.load(f)
+        min2 = pickle.load(f)
+        max2 = pickle.load(f)
 
 
 # store normalized data in df? yes
-for b in 'band_1', 'band_2':
-    imdata[b] = imdata[b].apply(normalize)
-    output_df[b] = output_df[b].apply(normalize)
+
+imdata['band_1'] = imdata['band_1'].apply(norm1)
+imdata['band_2'] = imdata['band_2'].apply(norm2)
 
 
 def make_stats_frame(save=False):
@@ -115,9 +127,11 @@ y = df.is_iceberg.values
 # prep image data for neural net
 # rescale to +/- 1
 
-print('normalizing')
+print('normalizing / building X')
 # X = normalize(np.stack([x1, x2], axis=1))
-X = normalize(np.stack([x1, x2, np.subtract(x2, x1)], axis=1))
+x1 = norm1(x1)
+x2 = norm2(x2)
+X = np.stack([x1, x2], axis=1)
 X = np.add(np.multiply(X, 2), -1)
 print(X.shape)
 
@@ -136,171 +150,10 @@ y_test = y[split:]
 df_test = df.iloc[split:]
 
 
-# prep test data
-x1 = np.stack(output_df.band_1)
-x2 = np.stack(output_df.band_2)
-output_data = normalize(np.stack([x1, x2, np.subtract(x2, x1)], axis=1))
-output_data = np.add(np.multiply(X, 2), -1)
-# output_df
-print('test data', output_data.shape)
-
-
 # dtype = torch.FloatTensor
 dtype = torch.cuda.FloatTensor  # Uncomment this to run on GPU
 
-
-class IcebergDataset(torch.utils.data.Dataset):
-    '''dataset containing icebergs for Kaggle comp
-    internally, df, X, and y are indexed by i as 0...n-1
-    '''
-    def __init__(self, _X, _y, _df, transform=None, training=True):
-        # self.df = df
-        self.X = _X
-        self.training = training
-        if self.training:
-            self.y = _y
-            assert len(self.X) == len(self.y)
-        self.df = _df
-        self.transform = transform
-        assert len(self.X) == len(self.df)
-        self.n = len(self.X)
-        global _last_pred
-
-    def __len__(self):
-        return len(self.X)
-
-    def __getitem__(self, i):
-        if not self.training:  # for test set:
-            x = self.X[i]
-            x = self.transform(x)
-            return x, self.df.index[i]  # data, id
-
-        x, y = self.X[i], self.y[i].reshape(1, 1)
-        x, y = torch.from_numpy(x).float(), y
-
-        if self.transform:
-            x = self.transform(x)
-
-        return x, y, self.df.index[i]   # iloc to avoid non-0 index
-
-    def show(self, n, rando=True):
-        # show approximately n samples
-        rows = int(n ** .3)
-        cols = int(n // rows)
-        channels = 3
-        fig, axes = plt.subplots(channels*rows, cols)
-        for row in range(rows):
-            for col in range(cols):
-                # pull an image
-                if rando:
-                    index = np.random.randint(0, self.n)
-                else:
-                    index = row * cols + col
-
-                # get some data from df
-                if self.training:
-                    arr, label, ID = self.__getitem__(index)
-                else:
-                    arr, ID = self.__getitem__(index)
-                    label = 'test'
-
-                p = str(_last_pred.get(ID))
-                arr = arr.numpy()
-                angle = str(self.df.angle.iloc[index])
-                coords = ' '.join([str(self.df.band_1_x[index]),
-                                   str(self.df.band_1_y[index]),
-                                   str(self.df.band_2_x[index]),
-                                   str(self.df.band_2_y[index])])
-                img = np.multiply(np.add(arr, 1), 127.5)
-                axes[row*channels, col].set_title(str(label)+' - pred: '+p)
-                axes[row*channels+1, col].set_title(angle)
-                axes[row*channels+2, col].set_title(coords)
-
-                for ch in range(channels):
-                    # Image.fromarray(img[ch]).show()   # for PIL
-                    loc = ch + row*channels, col
-                    axes[loc].axis('off')
-                    axes[loc].title.set_fontsize(8)
-                    if ch < img.shape[0]:
-                        # print image if applicable
-                        axes[loc].imshow(Image.fromarray(img[ch]))
-        plt.show()
-
-
-def drop_low(x):
-    '''clip an image to values above median'''
-    median = torch.median(x)
-    return torch.clamp(x, min=median)
-
-
-trs = transforms.Compose([drop_low, af.RandomRotate(60)])
-train_set = IcebergDataset(X_train,
-                           y_train,
-                           df_train,
-                           transform=trs)
-
-xval_set = IcebergDataset(X_test,
-                          y_test,
-                          df_test,
-                          transform=drop_low)
-
-output_dataset = IcebergDataset(output_data,
-                                None,
-                                output_df,
-                                training=False,
-                                transform=drop_low)
-# dataset.show(5)
-
-train_loader = torch.utils.data.DataLoader(train_set, batch_size=32,
-                                           shuffle=True, num_workers=4)
-
-test_loader = torch.utils.data.DataLoader(xval_set, batch_size=32,
-                                          shuffle=False, num_workers=4)
-output_loader = torch.utils.data.DataLoader(output_dataset, batch_size=32,
-                                            shuffle=False, num_workers=4)
-
-'''
-eval_set = IcebergDataset(X, y, df, transform=None)
-eval_loader = torch.utils.data.DataLoader(eval_set, batch_size=32,
-                                          shuffle=False, num_workers=4)
-'''
-
-
-class Net(nn.Module):
-    def __init__(self, channels):
-        super(Net, self).__init__()
-        # inputs, num filters, kernel size
-        self.conv1 = nn.Conv2d(channels, 32, 5)
-        self.drop0 = nn.Dropout2d()
-        self.conv2 = nn.Conv2d(32, 16, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.drop1 = nn.Dropout2d()
-        self.conv3 = nn.Conv2d(16, 16, 5)
-        self.drop2 = nn.Dropout2d()
-
-        self.fc1 = nn.Linear(16 * 5 * 5, 128)
-        self.drop_fc = nn.Dropout()
-        self.fc2 = nn.Linear(128, 32)
-        self.fc3 = nn.Linear(32, 2)
-        self.training = True
-
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = F.dropout(x, training=self.training)
-        x = self.pool(F.relu(self.conv2(x)))
-        x = F.dropout(x, training=self.training)
-        x = self.pool(F.relu(self.conv3(x)))
-        x = F.dropout(x, training=self.training)
-        # print(x.size())
-        x = x.view(-1, 16 * 5 * 5)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-
-
-net = Net(X.shape[1])
+net = IceNet(X.shape[1])
 net.float()
 net.cuda()
 
@@ -310,13 +163,38 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=0.015, momentum=0.9)
 
 
+# DEFINE TRANSFORMATIONS
+
+
 def set_rate(rate):
+    # BUILD NEW OPIMIZER (for variable-rate training)
     global optimizer
     optimizer = optim.SGD(net.parameters(), lr=rate, momentum=0.9)
     return True
 
 
-def train(n):
+# DEFINE DATASETS
+
+trs = transforms.Compose([clip_low_except_center, af.RandomRotate(60)])
+
+train_dataset = IcebergDataset(X_train,
+                               y_train,
+                               df_train,
+                               transform=trs)
+
+xval_dataset = IcebergDataset(X_test,
+                              y_test,
+                              df_test,
+                              transform=clip_low_except_center)
+
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32,
+                                           shuffle=True, num_workers=4)
+
+xval_loader = torch.utils.data.DataLoader(xval_dataset, batch_size=32,
+                                          shuffle=False, num_workers=4)
+
+
+def train(n, path='model/contrast_center_nov_5.torch'):
 
     for epoch in range(n):  # loop over the dataset multiple times
 
@@ -357,7 +235,7 @@ def train(n):
         if epoch % 10 == 9:
             print('\n## validation ## ')
             correct, total = 0, 0
-            for i, data in enumerate(test_loader, 0):
+            for i, data in enumerate(xval_loader, 0):
                 # get the inputs
                 image, target, ID = data
 
@@ -382,14 +260,20 @@ def train(n):
                   (epoch + 1, i + 1, val_loss / i))
             print('accuracy:', correct[0], 'of', total)
 
+            if val_loss / i < net.best_xval_loss:
+                print('New best! Saving... \n')
+                net.best_xval_loss = val_loss / i
+                torch.save(net, path)
+
     print('Finished Training')
 
 
-def write_preds(loader=test_loader):
+def write_preds(loader=xval_loader):
     '''
-    write predictions to _last_pred
+    write predictions, probs to _last_pred, _last_prob
     '''
     global _last_pred
+    global _last_prob
     cs = ['id',  'val0', 'val1', 'target', 'pred']
     pred_df = pd.DataFrame(columns=cs)
     correct, total = 0, 0
@@ -423,4 +307,5 @@ def write_preds(loader=test_loader):
     pred_df.set_index('id', inplace=True)
     for i in pred_df.index:
         _last_pred[i] = pred_df.pred[i]
+        _last_prob[i] = pred_df.val1[i]
     return pred_df
