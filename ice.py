@@ -40,7 +40,7 @@ import torchvision.transforms as transforms
 import affine_transforms as af
 from net_parameters import IcebergDataset, IceNet
 from ice_transforms import norm1, norm2, clip_low_except_center
-from ice_transforms import center_crop
+from ice_transforms import center_crop, contrast_background
 import pickle
 
 
@@ -116,6 +116,7 @@ def make_stats_frame(save=False):
 
 
 df_path = 'data/stat_frame.csv'
+
 if os.path.exists(df_path):
     df = pd.read_csv(df_path, index_col=0)
 else:
@@ -161,10 +162,13 @@ net.cuda()         # gpu
 
 # criterion = nn.LogSoftmax()
 criterion = nn.CrossEntropyLoss()
+'''
 optimizer = optim.SGD(net.parameters(), lr=0.0003, momentum=0.9,
                       weight_decay=1e-3)
 
 optimizer = optim.SGD(net.parameters(), lr=0.003, momentum=0.9)
+'''
+optimizer = optim.Adam(net.parameters(), lr=.001)
 
 '''
 for later on:
@@ -183,14 +187,17 @@ def set_rate(rate):
 
 # DEFINE DATASETS
 
-train_trs = transforms.Compose([af.RandomRotate(180),
-                                af.RandomZoom([.8, 1.5]),
+train_trs = transforms.Compose([af.RandomZoom([.7, 1.3]),
                                 clip_low_except_center,
+                                af.RandomTranslate(.10),
+                                # af.RandomRotate(180),
+                                af.RandomChoiceRotate([0, 5, 85, 90, 95, 175,
+                                                       180, 185, 265, 270]),
+                                # contrast_background,
                                 center_crop])
 
 # scale_to_angle happens in loader; ok because images only get expanded
-xval_trs = transforms.Compose([clip_low_except_center,
-                               center_crop])
+xval_trs = transforms.Compose([center_crop])
 
 train_dataset = IcebergDataset(X_train,
                                y_train,

@@ -51,3 +51,8 @@ def center_crop(x, c=12):
 def scale_to_angle(x, angle=.6):
     '''don't do this it's broken?'''
     return af.Zoom(1.6 - .75 * angle)(x)
+
+
+def contrast_background(x):
+    mask = x.lt(torch.median(x))    # element wise less than
+    return x.masked_fill_(mask, torch.min(x))
