@@ -39,8 +39,8 @@ import torch.optim as optim
 import torchvision.transforms as transforms
 import affine_transforms as af
 from net_parameters import IcebergDataset, IceNet
-from ice_transforms import norm1, norm2, clip_low_except_center
-from ice_transforms import center_crop, contrast_background
+from ice_transforms import norm1, norm2
+from ice_transforms import blur_dark, center_crop
 import pickle
 
 
@@ -141,7 +141,7 @@ print(X.shape)
 # (1604, 3, 75, 75)
 y.reshape(-1, 1)
 
-split = 32 * 36
+split = 32 * 40
 
 X_train = X[:split]
 y_train = y[:split]
@@ -168,7 +168,7 @@ optimizer = optim.SGD(net.parameters(), lr=0.0003, momentum=0.9,
 
 optimizer = optim.SGD(net.parameters(), lr=0.003, momentum=0.9)
 '''
-optimizer = optim.Adam(net.parameters(), lr=.001)
+optimizer = optim.Adam(net.parameters(), lr=.0003, weight_decay=1e-5)
 
 '''
 for later on:
@@ -187,17 +187,15 @@ def set_rate(rate):
 
 # DEFINE DATASETS
 
-train_trs = transforms.Compose([af.RandomZoom([.7, 1.3]),
-                                clip_low_except_center,
-                                af.RandomTranslate(.10),
-                                # af.RandomRotate(180),
-                                af.RandomChoiceRotate([0, 5, 85, 90, 95, 175,
-                                                       180, 185, 265, 270]),
+train_trs = transforms.Compose([blur_dark,
+                                af.RandomAffine(rotation_range=10,
+                                                translation_range=.05,
+                                                zoom_range=[.7, 1.3]),
                                 # contrast_background,
                                 center_crop])
 
 # scale_to_angle happens in loader; ok because images only get expanded
-xval_trs = transforms.Compose([center_crop])
+xval_trs = transforms.Compose([blur_dark, center_crop])
 
 train_dataset = IcebergDataset(X_train,
                                y_train,
@@ -216,7 +214,7 @@ xval_loader = torch.utils.data.DataLoader(xval_dataset, batch_size=32,
                                           shuffle=False, num_workers=4)
 
 
-def train(n, path='model/full_color_nov_5.torch'):
+def train(n, path='model/larger_validation'):
 
     for epoch in range(n):  # loop over the dataset multiple times
 
@@ -247,15 +245,14 @@ def train(n, path='model/full_color_nov_5.torch'):
 
             # print statistics
             running_loss += loss.data[0]
-            if i == 16:    # print every 2000 mini-batches
-                print('[%d, %5d] loss: %.3f' %
-                      (epoch + 1, i + 1, running_loss / i))
+
+        print('%d - loss: %.3f' % (epoch + 1, running_loss / i))
 
         val_loss = 0.0
         net.training = False
 
-        if epoch % 10 == 9:
-            print('\n## validation ## ')
+        if True:
+            # print('\n## validation ## ')
             correct, total = 0, 0
             for i, data in enumerate(xval_loader, 0):
                 # get the inputs
@@ -281,12 +278,11 @@ def train(n, path='model/full_color_nov_5.torch'):
                 # print statistics
                 val_loss += loss.data[0]
 
-            print('validation loss: %.3f' %
-                  (val_loss / i))
-            print('accuracy:', correct.data.cpu(), 'of', total)
+            print('val: loss: {:.3}  accuracy: {} of {}'.format(
+                  val_loss / i, correct.data.cpu().numpy(), total))
 
             if val_loss / i < net.best_xval_loss:
-                print('New best! Saving... \n')
+                print('Save. #save')
                 net.best_xval_loss = val_loss / i
                 torch.save(net, path)
 
@@ -326,7 +322,6 @@ def write_preds(loader=xval_loader):
         correct += (preds == target).sum().float()
         total += len(preds)
 
-    print('done')
     pred_df.set_index('id', inplace=True)
     for i in pred_df.index:
         loader.dataset.latest_pred[i] = pred_df.pred[i]

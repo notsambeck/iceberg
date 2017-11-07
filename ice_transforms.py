@@ -3,6 +3,7 @@ import torch
 import pickle
 import numpy as np
 import affine_transforms as af
+from scipy.ndimage import uniform_filter
 
 # pickle stats for access in test_loader
 pkl = 'data/stats.pkl'
@@ -49,10 +50,25 @@ def center_crop(x, c=12):
 
 
 def scale_to_angle(x, angle=.6):
-    '''don't do this it's broken?'''
+    '''don't do this because it's broken'''
     return af.Zoom(1.6 - .75 * angle)(x)
 
 
 def contrast_background(x):
     mask = x.lt(torch.median(x))    # element wise less than
     return x.masked_fill_(mask, torch.min(x))
+
+
+def blur_dark(x):
+    mask = x.lt(torch.median(x))    # element wise less than
+    x[mask] = torch.from_numpy(uniform_filter(x.numpy(), 5))
+    # x[2] = x[0] - x[1]
+    return x
+
+
+def blur_outside(x, size=15):
+    out = torch.from_numpy(uniform_filter(x.numpy(), 4))
+    cntr = x.size()[1] // 2
+    im_cntr = x[:, cntr-size:cntr+size, cntr-size:cntr+size]
+    out[:, cntr-size:cntr+size, cntr-size:cntr+size] = im_cntr
+    return out

@@ -1,9 +1,15 @@
+'''
+NOTE - input dimension is manual
+'''
+
+
 import pandas as pd
 import torch
+from torchvision.transforms import Compose
 from torch.autograd import Variable
 import numpy as np
 from net_parameters import IcebergDataset, IceNet
-from ice_transforms import clip_low_except_center, norm1, norm2
+from ice_transforms import norm1, norm2, blur_dark, center_crop
 
 
 df = pd.read_json('data/test.json')
@@ -17,19 +23,21 @@ df['band_1'] = df['band_1'].apply(norm1)
 df['band_2'] = df['band_2'].apply(norm2)
 
 n = len(df)
-batch_size = 64
+batch_size = 256
 batches = n // batch_size + 1
 
-net = IceNet(2)
-net = torch.load('model/contrast_center_nov_5.torch')
+net = IceNet(3)
+net = torch.load('model/larger_validation')
 
 _preds = {}
 _probs = {}
 
+trs = Compose([blur_dark, center_crop])
+
 
 def predict(loader):
     '''
-    write predictions, probs to preds, probs
+    write predictions, probs
     '''
     cs = ['id',  'val0', 'val1', 'pred']
     pred_df = pd.DataFrame(columns=cs)
@@ -53,7 +61,7 @@ def predict(loader):
         # print(tdf.head())
         pred_df = pred_df.append(tdf)
 
-    print('batch done')
+    # print('batch done')
     pred_df.set_index('id', inplace=True)
     return pred_df
 
@@ -72,7 +80,7 @@ for b in range(batches):
     batch_dataset = IcebergDataset(X,
                                    None,
                                    df.iloc[start: end],
-                                   transform=clip_low_except_center,
+                                   transform=trs,
                                    training=False)
     batch_loader = torch.utils.data.DataLoader(batch_dataset,
                                                batch_size=32,

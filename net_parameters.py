@@ -12,18 +12,17 @@ class IceNet(nn.Module):
     def __init__(self, channels):
         super(IceNet, self).__init__()
         self.pool = nn.MaxPool2d(2, 2)           # pool is not a layer
-        # inputs, num filters, kernel size   (batch size not described!)
-        self.conv1a = nn.Conv2d(channels, 16, 3)  # 60 > 58
-        self.conv1b = nn.Conv2d(16, 32, 3)        # > 56 > 28
+        # inputs, num filters, kernel size (not batch)
+        self.conv1a = nn.Conv2d(channels, 10, 3)  # 60 > 58
+        self.conv1b = nn.Conv2d(10, 16, 3)        # > 56 > 28
         self.drop0 = nn.Dropout2d()               # NC
-        self.conv2a = nn.Conv2d(32, 32, 3)         # 28 -> 26
-        self.conv2b = nn.Conv2d(32, 64, 3)         # 26 -> 24 ->12
+        self.conv2a = nn.Conv2d(16, 16, 3)         # 28 -> 26
+        self.conv2b = nn.Conv2d(16, 32, 3)         # 26 -> 24 ->12
         self.drop1 = nn.Dropout2d()               # NC
-        self.conv3a = nn.Conv2d(64, 64, 3)         # 12 -> 10 -> 5
-        self.conv3b = nn.Conv2d(64, 128, 3)         # 12 -> 10 -> 5
+        self.conv3a = nn.Conv2d(32, 32, 3)         # 12 -> 10 -> 5
+        self.conv3b = nn.Conv2d(32, 64, 3)         # 12 -> 10 -> 5
         self.drop2 = nn.Dropout2d()
-
-        self.fc1 = nn.Linear(128 * 3 * 3, 256)
+        self.fc1 = nn.Linear(64 * 3 * 3, 256)
         self.drop_fc = nn.Dropout()
         self.fc2 = nn.Linear(256, 128)
         self.fc3 = nn.Linear(128, 2)
@@ -70,11 +69,17 @@ class IcebergDataset(Dataset):
         # generate difference channel
         x0 = _X[:, 0]
         x1 = _X[:, 1]
+        # difference
         x2 = np.subtract(x0, x1)
+        # center
         x2 = np.subtract(x2, np.mean(x2))
+        # divide by max to scale to +/- 1
         x2 = np.divide(x2, np.max(x2))
+        # x2 = np.divide(x2, np.subtract(np.max(x2), np.min(x2)))
         self.X = np.stack([x0, x1, x2], axis=1)
-        print('dataset init:', self.X.min(), self.X.max(), self.X.shape)
+        print('dataset init:', self.X.min(), self.X.max(),
+              ' diff:', self.X[:, 2].min(), self.X[:, 2].max(),
+              self.X.shape)
 
         self.transform = transform
         self.training = training
@@ -99,6 +104,9 @@ class IcebergDataset(Dataset):
             return x, self.df.index[i]  # data, id
 
         x, y = self.X[i], self.y[i].reshape(1, 1)
+        flip = np.random.choice([0, 1])
+        if flip:
+            x = np.flip(x, 2).copy()
         x, y = torch.from_numpy(x).float(), y
 
         if self.transform:
