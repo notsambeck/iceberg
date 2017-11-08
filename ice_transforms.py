@@ -1,28 +1,6 @@
 '''transforms for images / pytorch tensors'''
 import torch
-import pickle
-import numpy as np
 import affine_transforms as af
-from scipy.ndimage import uniform_filter
-
-# pickle stats for access in test_loader
-pkl = 'data/stats.pkl'
-with open(pkl, 'rb') as f:
-    min1 = pickle.load(f)
-    max1 = pickle.load(f)
-    min2 = pickle.load(f)
-    max2 = pickle.load(f)
-
-diff1 = max1 - min1
-diff2 = max2 - min2
-
-
-def norm1(arr):
-    return np.divide(np.subtract(arr, min1), diff1)
-
-
-def norm2(arr):
-    return np.divide(np.subtract(arr, min2), diff2)
 
 
 def clip_low(x):
@@ -44,9 +22,25 @@ def clip_low_except_center(x, size=10):
     return out
 
 
-def center_crop(x, c=12):
-    '''crop center of square images by c'''
-    return x[:, c:1-c, c:1-c]
+def center_crop(im, center=None, size=28):
+    '''crop center of square images to output_size * 2
+    center defaults to true center'''
+    if type(im) is torch.FloatTensor:
+        im = im.numpy()
+    if center is None:
+        x, y = im.shape[1] // 2, im.shape[2] // 2
+    else:
+        x, y = center
+        if x < size:
+            x = size
+        elif x > im.shape[1] - size:
+            x = im.shape[1] - size
+        if y < size:
+            y = size
+        elif y > im.shape[2] - size:
+            y = im.shape[2] - size
+
+    return im[:, x-size:x+size, y-size:y+size]
 
 
 def scale_to_angle(x, angle=.6):
@@ -57,18 +51,3 @@ def scale_to_angle(x, angle=.6):
 def contrast_background(x):
     mask = x.lt(torch.median(x))    # element wise less than
     return x.masked_fill_(mask, torch.min(x))
-
-
-def blur_dark(x):
-    mask = x.lt(torch.median(x))    # element wise less than
-    x[mask] = torch.from_numpy(uniform_filter(x.numpy(), 5))
-    # x[2] = x[0] - x[1]
-    return x
-
-
-def blur_outside(x, size=15):
-    out = torch.from_numpy(uniform_filter(x.numpy(), 4))
-    cntr = x.size()[1] // 2
-    im_cntr = x[:, cntr-size:cntr+size, cntr-size:cntr+size]
-    out[:, cntr-size:cntr+size, cntr-size:cntr+size] = im_cntr
-    return out

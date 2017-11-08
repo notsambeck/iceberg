@@ -198,21 +198,21 @@ class RandomAffine(object):
         ---------
         rotation_range : one integer or float
             image will be rotated randomly between (-degrees, degrees)
-        translation_range : a float or a tuple/list with 2 floats between [0, 1)
+        translation_range: a float or a tuple/list with 2 floats between [0, 1)
             first value:
-                image will be horizontally shifted between 
-                (-height_range * height_dimension, height_range * height_dimension)
+                image will be horizontally shifted between
+                (-height_range * height_dimension, h_range * h_dimension)
             second value:
-                Image will be vertically shifted between 
+                Image will be vertically shifted between
                 (-width_range * width_dimension, width_range * width_dimension)
         shear_range : float
             image will be sheared randomly between (-degrees, degrees)
         zoom_range : list/tuple with two floats between [0, infinity).
             first float should be less than the second
-            lower and upper bounds on percent zoom. 
-            Anything less than 1.0 will zoom in on the image, 
+            lower and upper bounds on percent zoom.
+            Anything less than 1.0 will zoom in on the image,
             anything greater than 1.0 will zoom out on the image.
-            e.g. (0.7, 1.0) will only zoom in, 
+            e.g. (0.7, 1.0) will only zoom in,
                  (1.0, 1.4) will only zoom out,
                  (0.7, 1.4) will randomly zoom in or out
         interp : string in {'bilinear', 'nearest'} or list of strings
@@ -888,3 +888,41 @@ class Zoom(object):
                                        center=True)
                 outputs.append(input_tf)
             return outputs if idx > 1 else outputs[0]
+
+
+class RandomFlip(object):
+
+    def __init__(self, h=True, v=False, p=0.5):
+        """
+        Randomly flip an image horizontally and/or vertically with
+        some probability.
+        Arguments
+        ---------
+        h : boolean
+            whether to horizontally flip w/ probability p
+        v : boolean
+            whether to vertically flip w/ probability p
+        p : float between [0,1]
+            probability with which to apply allowed flipping operations
+        """
+        self.horizontal = h
+        self.vertical = v
+        self.p = p
+
+    def __call__(self, x):
+
+        if self.horizontal:
+            if random.random() < self.p:
+                x = x.swapaxes(2, 0)
+                x = x[::-1, ...]
+                x = x.swapaxes(0, 2)
+
+        # vertical flip with p = self.p
+        if self.vertical:
+            if random.random() < self.p:
+                x = x.swapaxes(1, 0)
+                x = x[::-1, ...]
+                x = x.swapaxes(0, 1)
+
+        # must copy because torch doesnt current support neg strides
+        return th.from_numpy(x.copy())

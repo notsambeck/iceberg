@@ -32,125 +32,151 @@ import matplotlib.pyplot as plt  # noqa
 
 import torch
 from torch.autograd import Variable
+from torch.utils.data import Dataset
 import torch.nn as nn
 import torch.optim as optim
 
 # import torchvision
-import torchvision.transforms as transforms
 import affine_transforms as af
-from net_parameters import IcebergDataset, IceNet
-from ice_transforms import norm1, norm2
-from ice_transforms import blur_dark, center_crop
+from net_parameters import IceNet
+from ice_transforms import center_crop
 import pickle
+
+from PIL import Image
+
+
+class IcebergDataset(Dataset):
+    '''dataset containing icebergs for Kaggle comp
+    internally, df, X, and y are indexed by i as 0...n-1
+    '''
+    def __init__(self, _X, _y, _df, transform=None, kind='training'):
+        # generate difference channel
+
+        self.X = _X
+        self.transform = transform
+        self.kind = kind
+        if self.kind != 'test':
+            self.y = _y
+            assert len(self.X) == len(self.y)
+        self.df = _df
+        assert len(self.X) == len(self.df)
+        self.n = len(self.X)
+        self.latest_pred = {}
+        self.latest_prob = {}
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, i):
+        # all test set:
+        x = self.X[i]
+
+        if self.transform:
+            x = self.transform(torch.from_numpy(x).float())
+
+        if self.kind == 'xval' or self.kind == 'test':
+            x = center_crop(x, center=(self.df.x.iloc[i], self.df.y.iloc[i]))
+        else:
+            flip = np.random.choice([0, 1])
+            if flip:
+                x = np.flip(x.numpy(), 2).copy()
+            x = torch.from_numpy(center_crop(x))
+
+        if self.kind == 'training' or self.kind == 'xval':
+            return x, self.df.index[i], self.y[i].reshape(1, 1)
+        else:
+            return x, self.df.index[i]
+
+    def show(self, n, rando=True, show_coords=False):
+        # show approximately n samples and some data about them
+        rows = int(n ** .3)
+        cols = int(n // rows)
+        channels = 3
+        fig, axes = plt.subplots(channels*rows, cols)
+        for row in range(rows):
+            for col in range(cols):
+                # pull an image
+                if rando:
+                    index = np.random.randint(0, self.n)
+                else:
+                    index = row * cols + col
+
+                # get some data from df
+                if self.kind != 'test':
+                    trch, label, ID = self.__getitem__(index)
+                    arr = trch.numpy()
+                else:
+                    trch, ID = self.__getitem__(index)
+                    label = 'test'
+                    arr = trch.numpy()
+
+                p = self.latest_pred.get(ID)
+                prob = self.latest_prob.get(ID)
+
+                l = label[0][0]
+                correct = p == l
+                # angle = str(self.df.angle.iloc[index])
+                coords = [self.df.x.iloc[index], self.df.y.iloc[index]]
+                img = np.multiply(arr - arr.min(),
+                                  255/(arr.max() - arr.min()))
+
+                axes[row*channels, col].set_title(str(l)+', p=' + str(p))
+                axes[row*channels+1, col].set_title(str(prob))
+                # axes[row*channels+1, col].set_title(angle)
+                axes[row*channels+2, col].set_title(' '.join(
+                    [str(c) for c in coords]))
+
+                for ch in range(channels):
+                    # Image.fromarray(img[ch]).show()   # for PIL
+                    loc = ch + row*channels, col
+                    axes[loc].axis('off')
+                    axes[loc].title.set_fontsize(8)
+                    if ch < img.shape[0]:
+                        # print image if applicable
+                        axes[loc].imshow(Image.fromarray(img[ch]))
+
+                        if ch == 0:
+                            if not correct:
+                                axes[loc].plot(2, 2, 'rx')
+
+                        # add dot for highlight coords ?
+                        if show_coords:
+                            if ch == 0:
+                                axes[loc].plot(coords[0], coords[1], 'bx')
+
+        plt.show()
+
+
+print('loading X, y pickle')
+train = 'data/train_dataset.pkl'
+if os.path.exists(train):
+    with open(train, 'rb') as f:
+        X = pickle.load(f)
+        y = pickle.load(f)
+    assert X.shape[0] == y.shape[0]
+
+df_path = 'data/train_normalized_stats.csv'
+print('loading stats dataframe from csv')
+dataf = pd.read_csv(df_path)
+dataf.set_index('id', inplace=True)
+assert len(dataf) == X.shape[0]
+
+
+split = 32 * 32
+
+X_train = X[:split]
+y_train = y[:split]
+df_train = dataf.iloc[:split]
+
+X_test = X[split:]
+y_test = y[split:]
+df_test = dataf.iloc[split:]
 
 
 # global dictionary that stores predictions to avoid altering dfs
 # {index: pred}
 _last_pred = {}
 _last_prob = {}
-
-
-# LOAD TRAINING DATA
-
-imdata = pd.read_json('data/train.json')
-imdata.sort_values('id', inplace=True)
-imdata.set_index('id', inplace=True)
-
-# IMAGE NORMS / STATS
-
-for b in 'band_1', 'band_2':
-    imdata[b] = imdata[b].apply(lambda x: np.array(x).reshape(75, 75))
-
-x1 = np.stack(imdata.band_1)
-x2 = np.stack(imdata.band_2)
-
-
-# pickle stats here, OR load normalize from ice_transforms
-pkl = 'data/stats.pkl'
-if not os.path.exists(pkl):
-    min1 = np.min(x1)
-    max1 = np.max(x1)
-    min2 = np.min(x2)
-    max2 = np.max(x2)
-    with open(pkl, 'wb') as f:
-        pickle.dump(min1, f)
-        pickle.dump(max1, f)
-        pickle.dump(min2, f)
-        pickle.dump(max2, f)
-else:
-    with open(pkl, 'rb') as f:
-        min1 = pickle.load(f)
-        max1 = pickle.load(f)
-        min2 = pickle.load(f)
-        max2 = pickle.load(f)
-
-
-# store normalized data in df? yes
-
-imdata['band_1'] = imdata['band_1'].apply(norm1)
-imdata['band_2'] = imdata['band_2'].apply(norm2)
-
-
-def make_stats_frame(save=False):
-    df = pd.DataFrame()
-    df['id'] = imdata.index
-    df.set_index('id', inplace=True)
-    df['is_iceberg'] = imdata.is_iceberg
-    df['angle'] = imdata.inc_angle
-    df['pred'] = [None] * len(df)
-
-    for b in 'band_1', 'band_2':
-        df[b + '_max'] = imdata[b].apply(np.max)
-        df[b + '_min'] = imdata[b].apply(np.min)
-        df[b + '_mean'] = imdata[b].apply(np.mean)
-        df[b + '_median'] = imdata[b].apply(np.median)
-        df[b + '_coords'] = imdata[b].apply(
-            lambda x: np.unravel_index(np.argmax(x), x.shape))
-        df[b + '_x'] = df[b + '_coords'].apply(lambda x: x[0])
-        df[b + '_y'] = df[b + '_coords'].apply(lambda x: x[1])
-
-    if save:
-        df.to_csv(save)
-
-    return df
-
-
-df_path = 'data/stat_frame.csv'
-
-if os.path.exists(df_path):
-    df = pd.read_csv(df_path, index_col=0)
-else:
-    print('making new stats dataframe! \n')
-    df = make_stats_frame(save=df_path)
-    df.to_csv(df_path)
-
-y = df.is_iceberg.values
-
-# prep image data for neural net
-# rescale to +/- 1
-
-print('normalizing / building X')
-# X = normalize(np.stack([x1, x2], axis=1))
-x1 = norm1(x1)
-x2 = norm2(x2)
-X = np.stack([x1, x2], axis=1)
-X = np.add(np.multiply(X, 2), -1)
-print(X.shape)
-
-# >>> X.shape
-# (1604, 3, 75, 75)
-y.reshape(-1, 1)
-
-split = 32 * 40
-
-X_train = X[:split]
-y_train = y[:split]
-df_train = df.iloc[:split]
-
-X_test = X[split:]
-y_test = y[split:]
-df_test = df.iloc[split:]
-
 
 # dtype = torch.FloatTensor
 dtype = torch.cuda.FloatTensor  # to run on GPU
@@ -167,13 +193,12 @@ optimizer = optim.SGD(net.parameters(), lr=0.0003, momentum=0.9,
                       weight_decay=1e-3)
 
 optimizer = optim.SGD(net.parameters(), lr=0.003, momentum=0.9)
-'''
-optimizer = optim.Adam(net.parameters(), lr=.0003, weight_decay=1e-5)
 
-'''
+optimizer = optim.Adam(net.parameters(), lr=.00003, weight_decay=1e-5)
+
 for later on:
-optimizer = optim.SGD(net.parameters(), lr=0.003, momentum=0.9, weight_decay=1e-3)   # noqa
 '''
+optimizer = optim.SGD(net.parameters(), lr=0.003, momentum=0.9, weight_decay=1e-5)   # noqa
 
 # DEFINE TRANSFORMATIONS
 
@@ -187,15 +212,11 @@ def set_rate(rate):
 
 # DEFINE DATASETS
 
-train_trs = transforms.Compose([blur_dark,
-                                af.RandomAffine(rotation_range=10,
-                                                translation_range=.05,
-                                                zoom_range=[.7, 1.3]),
-                                # contrast_background,
-                                center_crop])
+train_trs = af.RandomAffine(rotation_range=10.0,
+                            translation_range=.05,
+                            zoom_range=[.7, 1.3])
 
-# scale_to_angle happens in loader; ok because images only get expanded
-xval_trs = transforms.Compose([blur_dark, center_crop])
+xval_trs = None
 
 train_dataset = IcebergDataset(X_train,
                                y_train,
@@ -205,6 +226,7 @@ train_dataset = IcebergDataset(X_train,
 xval_dataset = IcebergDataset(X_test,
                               y_test,
                               df_test,
+                              kind='xval',
                               transform=xval_trs)
 
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32,
@@ -251,7 +273,7 @@ def train(n, path='model/larger_validation'):
         val_loss = 0.0
         net.training = False
 
-        if True:
+        if epoch % 10 == 9:
             # print('\n## validation ## ')
             correct, total = 0, 0
             for i, data in enumerate(xval_loader, 0):
@@ -326,4 +348,4 @@ def write_preds(loader=xval_loader):
     for i in pred_df.index:
         loader.dataset.latest_pred[i] = pred_df.pred[i]
         loader.dataset.latest_prob[i] = pred_df.val1[i]
-    return pred_df
+    return True
