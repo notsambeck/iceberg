@@ -77,9 +77,11 @@ class IcebergDataset(Dataset):
         if self.kind == 'xval' or self.kind == 'test':
             x = center_crop(x, center=(self.df.x.iloc[i], self.df.y.iloc[i]))
         else:
+            if type(x) is not np.ndarray:
+                x = x.numpy()
             flip = np.random.choice([0, 1])
             if flip:
-                x = np.flip(x.numpy(), 2).copy()
+                x = np.flip(x, 2).copy()
             x = torch.from_numpy(center_crop(x))
 
         if self.kind == 'training' or self.kind == 'xval':
@@ -103,12 +105,13 @@ class IcebergDataset(Dataset):
 
                 # get some data from df
                 if self.kind != 'test':
-                    trch, label, ID = self.__getitem__(index)
-                    arr = trch.numpy()
+                    arr, ID, label = self.__getitem__(index)
                 else:
-                    trch, ID = self.__getitem__(index)
+                    arr, ID = self.__getitem__(index)
                     label = 'test'
-                    arr = trch.numpy()
+
+                if type(arr) is not np.ndarray:
+                    arr = arr.numpy()
 
                 p = self.latest_pred.get(ID)
                 prob = self.latest_prob.get(ID)
@@ -198,7 +201,7 @@ optimizer = optim.Adam(net.parameters(), lr=.00003, weight_decay=1e-5)
 
 for later on:
 '''
-optimizer = optim.SGD(net.parameters(), lr=0.003, momentum=0.9, weight_decay=1e-5)   # noqa
+optimizer = optim.SGD(net.parameters(), lr=0.03, momentum=0.9)
 
 # DEFINE TRANSFORMATIONS
 
@@ -229,6 +232,12 @@ xval_dataset = IcebergDataset(X_test,
                               kind='xval',
                               transform=xval_trs)
 
+xval2_dataset = IcebergDataset(X_test,
+                               y_test,
+                               df_test,
+                               kind='training',
+                               transform=xval_trs)
+
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32,
                                            shuffle=True, num_workers=4)
 
@@ -236,7 +245,11 @@ xval_loader = torch.utils.data.DataLoader(xval_dataset, batch_size=32,
                                           shuffle=False, num_workers=4)
 
 
-def train(n, path='model/larger_validation'):
+xval2_loader = torch.utils.data.DataLoader(xval2_dataset, batch_size=32,
+                                           shuffle=False, num_workers=4)
+
+
+def train(n, path='model/nov8.torch'):
 
     for epoch in range(n):  # loop over the dataset multiple times
 
@@ -244,7 +257,7 @@ def train(n, path='model/larger_validation'):
         net.training = True
         for i, data in enumerate(train_loader, 0):
             # get the inputs
-            image, target, ID = data
+            image, ID, target = data
 
             image = image.cuda().float()
             target = target.view(-1)
@@ -278,7 +291,7 @@ def train(n, path='model/larger_validation'):
             correct, total = 0, 0
             for i, data in enumerate(xval_loader, 0):
                 # get the inputs
-                image, target, ID = data
+                image, ID, target = data
 
                 image = image.cuda().float()
                 target = target.view(-1)
@@ -308,6 +321,37 @@ def train(n, path='model/larger_validation'):
                 net.best_xval_loss = val_loss / i
                 torch.save(net, path)
 
+            val_loss = 0.0
+            net.training = False
+
+            correct, total = 0, 0
+            for i, data in enumerate(xval2_loader, 0):
+                # get the inputs
+                image, ID, target = data
+
+                image = image.cuda().float()
+                target = target.view(-1)
+                # print('target:', target.size(), 'image', image.size())
+
+                # wrap them in Variable
+                image, target = Variable(image.cuda()), Variable(target.cuda())
+
+                optimizer.zero_grad()
+                outputs = net(image)
+
+                loss = criterion(outputs, target)
+                _, preds = torch.max(outputs, 1)
+                # print(preds, target)
+                # return preds, target
+                correct += (preds == target).sum().float()
+                total += len(preds)
+
+                # print statistics
+                val_loss += loss.data[0]
+
+            print('val with transform: loss: {:.3}  accuracy: {} of {}'.format(
+                  val_loss / i, correct.data.cpu().numpy(), total))
+
     print('Finished Training')
 
 
@@ -320,7 +364,7 @@ def write_preds(loader=xval_loader):
     correct, total = 0, 0
     for i, data in enumerate(loader, 0):
         # get the inputs
-        image, target, ID = data
+        image, ID, target = data
 
         image = image.cuda().float()
         y = target.view(-1)

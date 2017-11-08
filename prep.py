@@ -10,7 +10,6 @@ import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 
-import os
 import pickle
 
 import scipy.ndimage.filters as filters
@@ -38,6 +37,8 @@ def standardize(arr):
     '''subtract mean and divide by standard dev.'''
     return np.divide(np.subtract(arr, arr.mean()), arr.std())
 
+x1 = standardize(x1)
+x2 = standardize(x2)
 
 # normalize df
 imdata['band_1'] = imdata['band_1'].apply(standardize)
@@ -107,21 +108,11 @@ foot = np.array([[[0, 1, 1, 1, 0],
                   [1, 1, 1, 1, 1],
                   [0, 1, 1, 1, 0]]])
 
-h_size = 20
-
 
 def blur_keep_highlight(im_stack):
     # blur image
     print(im_stack.min())
     blur = filters.median_filter(im_stack, footprint=foot)
-    # keep full detail of highlgihts
-    '''
-    for i in range(len(im_stack)):
-        ix, iy = df.x.iloc[i], df.y.iloc[i]
-        a, b, c, d = ix-h_size, ix+h_size, iy-h_size, iy+h_size
-        blur[i, a:b, c:d] = np.maximum(im_stack[i, a:b, c:d],
-                                       blur[i, a:b, c:d])
-    '''
     blur = np.maximum(im_stack, blur)
     print(blur.min())
     im_stack = standardize(blur)
@@ -129,20 +120,28 @@ def blur_keep_highlight(im_stack):
 
 
 x3 = x1 - x2
-b1 = blur_keep_highlight(x1)
-b2 = blur_keep_highlight(x2)
-b3 = blur_keep_highlight(x3)
-X = np.stack([b1, b2, b3], axis=1)
+x3 = standardize(x3)
+X = np.stack([x1, x2, x3], axis=1)
 
-for i in range(1, 5):
+# b1 = blur_keep_highlight(x1)
+# b2 = blur_keep_highlight(x2)
+# b3 = blur_keep_highlight(x3)
+# X = np.stack([b1, b2, b3], axis=1)
+
+for i in range(1, 4):
     offset = 25
     im1 = x1[i+offset]
-    plt.subplot('42' + str(2*i - 1))
+    plt.subplot('33' + str(3*i - 2))
     plt.imshow(Image.fromarray((im1 - im1.min()) * 255
                                / (im1.max() - im1.min())))
 
+    im2a = x3[i+offset]
+    plt.subplot('33' + str(3*i - 1))
+    plt.imshow(Image.fromarray((im2a - im2a.min()) * 255
+                               / (im2a.max() - im2a.min())))
+
     im2 = X[i + offset, 0]
-    plt.subplot('42' + str(2*i))
+    plt.subplot('33' + str(3*i))
     plt.imshow(Image.fromarray((im2 - im2.min()) * 255
                                / (im2.max() - im2.min())))
 
