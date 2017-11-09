@@ -37,6 +37,7 @@ def standardize(arr):
     '''subtract mean and divide by standard dev.'''
     return np.divide(np.subtract(arr, arr.mean()), arr.std())
 
+
 x1 = standardize(x1)
 x2 = standardize(x2)
 
@@ -45,7 +46,7 @@ imdata['band_1'] = imdata['band_1'].apply(standardize)
 imdata['band_2'] = imdata['band_2'].apply(standardize)
 
 
-def find_brightest_region(im, n=5):
+def find_brightest_region(im, n=7):
     '''
     args:
         im: image channel
@@ -109,38 +110,51 @@ foot = np.array([[[0, 1, 1, 1, 0],
                   [0, 1, 1, 1, 0]]])
 
 
-def blur_keep_highlight(im_stack):
+def blur_keep_highlight(im_stack, h_size=1, filt=[0, 1, 1]):
     # blur image
     print(im_stack.min())
-    blur = filters.median_filter(im_stack, footprint=foot)
-    blur = np.maximum(im_stack, blur)
+    # CAUTION: dim0 is across stacked image
+    blur = filters.gaussian_filter(im_stack, filt)
+    for i in range(len(im_stack)):
+        ix, iy = df.x.iloc[i], df.y.iloc[i]
+        a, b, c, d = ix-h_size, ix+h_size, iy-h_size, iy+h_size
+        blur[i, a:b, c:d] = np.maximum(im_stack[i, a:b, c:d],
+                                       blur[i, a:b, c:d])
+    # blur = np.maximum(im_stack, blur)
     print(blur.min())
     im_stack = standardize(blur)
     return im_stack
 
 
-x3 = x1 - x2
-x3 = standardize(x3)
-X = np.stack([x1, x2, x3], axis=1)
+blur_all = False
 
-# b1 = blur_keep_highlight(x1)
-# b2 = blur_keep_highlight(x2)
-# b3 = blur_keep_highlight(x3)
-# X = np.stack([b1, b2, b3], axis=1)
+
+if blur_all:
+    b1 = blur_keep_highlight(x1, filt=[0, 1, 1])
+    b2 = blur_keep_highlight(x2, filt=[0, 2, 2])
+    b3 = x1 - blur_keep_highlight(x2)
+    b3 = standardize(b3)
+    X = np.stack([b1, b2, b3], axis=1)
+else:
+    b1 = blur_keep_highlight(x1, filt=[0, 2, 2])
+    b2 = blur_keep_highlight(x2, filt=[0, 1, 1])
+    x3 = b1 - b2
+    x3 = standardize(x3)
+    X = np.stack([x1, x2, x3], axis=1)
 
 for i in range(1, 4):
-    offset = 25
-    im1 = x1[i+offset]
+    offset = 15
+    im1 = X[i+offset, 0]
     plt.subplot('33' + str(3*i - 2))
     plt.imshow(Image.fromarray((im1 - im1.min()) * 255
                                / (im1.max() - im1.min())))
 
-    im2a = x3[i+offset]
+    im2a = X[i+offset, 1]
     plt.subplot('33' + str(3*i - 1))
     plt.imshow(Image.fromarray((im2a - im2a.min()) * 255
                                / (im2a.max() - im2a.min())))
 
-    im2 = X[i + offset, 0]
+    im2 = X[i + offset, 2]
     plt.subplot('33' + str(3*i))
     plt.imshow(Image.fromarray((im2 - im2.min()) * 255
                                / (im2.max() - im2.min())))

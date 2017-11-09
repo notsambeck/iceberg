@@ -75,7 +75,7 @@ class IcebergDataset(Dataset):
             x = self.transform(torch.from_numpy(x).float())
 
         if self.kind == 'xval' or self.kind == 'test':
-            x = center_crop(x, center=(self.df.x.iloc[i], self.df.y.iloc[i]))
+            x = center_crop(x)
         else:
             if type(x) is not np.ndarray:
                 x = x.numpy()
@@ -89,7 +89,7 @@ class IcebergDataset(Dataset):
         else:
             return x, self.df.index[i]
 
-    def show(self, n, rando=True, show_coords=False):
+    def show(self, n=40, rando=True, show_coords=False):
         # show approximately n samples and some data about them
         rows = int(n ** .3)
         cols = int(n // rows)
@@ -118,16 +118,16 @@ class IcebergDataset(Dataset):
 
                 l = label[0][0]
                 correct = p == l
-                # angle = str(self.df.angle.iloc[index])
+                angle = str(self.df.angle.iloc[index])
                 coords = [self.df.x.iloc[index], self.df.y.iloc[index]]
                 img = np.multiply(arr - arr.min(),
                                   255/(arr.max() - arr.min()))
 
                 axes[row*channels, col].set_title(str(l)+', p=' + str(p))
                 axes[row*channels+1, col].set_title(str(prob))
-                # axes[row*channels+1, col].set_title(angle)
-                axes[row*channels+2, col].set_title(' '.join(
-                    [str(c) for c in coords]))
+                axes[row*channels+2, col].set_title(angle)
+                '''axes[row*channels+2, col].set_title(' '.join(
+                    [str(c) for c in coords]))'''
 
                 for ch in range(channels):
                     # Image.fromarray(img[ch]).show()   # for PIL
@@ -165,7 +165,7 @@ dataf.set_index('id', inplace=True)
 assert len(dataf) == X.shape[0]
 
 
-split = 32 * 32
+split = 32 * 36
 
 X_train = X[:split]
 y_train = y[:split]
@@ -236,7 +236,7 @@ xval2_dataset = IcebergDataset(X_test,
                                y_test,
                                df_test,
                                kind='training',
-                               transform=xval_trs)
+                               transform=train_trs)
 
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32,
                                            shuffle=True, num_workers=4)
