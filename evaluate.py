@@ -2,37 +2,25 @@
 NOTE - input dimension is manual
 '''
 
-
 import pandas as pd
 import torch
-from torchvision.transforms import Compose
 from torch.autograd import Variable
-import numpy as np
-from net_parameters import IcebergDataset, IceNet
-from ice_transforms import norm1, norm2, center_crop
+import numpy as np   # noqa
+from ice import IcebergDataset
+from net_parameters import IceNet
+import pickle
 
+ids = pd.read_csv('data/test_ids.csv')
+ids.set_index('id', inplace=True)
 
-df = pd.read_json('data/test.json')
-df.set_index('id', inplace=True)
-
-for band in 'band_1', 'band_2':
-    df[band] = df[band].apply(lambda x: np.array(x).reshape(75, 75))
-
-
-df['band_1'] = df['band_1'].apply(norm1)
-df['band_2'] = df['band_2'].apply(norm2)
-
-n = len(df)
-batch_size = 256
-batches = n // batch_size + 1
+with open('data/test_dataset_X.pkl', 'rb') as f:
+    X = pickle.load(f)
 
 net = IceNet(3)
-net = torch.load('model/larger_validation')
+net = torch.load('model/nov8_tinyval.torch')
 
 _preds = {}
 _probs = {}
-
-trs = Compose([center_crop])
 
 
 def predict(loader):
@@ -69,26 +57,21 @@ def predict(loader):
 cs = ['val0', 'val1', 'pred']
 out = pd.DataFrame(columns=cs)
 
-for b in range(batches):
-    start = b * batch_size
-    end = (b + 1) * batch_size
-    end = min(end, n)
-    x1 = np.stack(df.band_1.iloc[start: end])
-    x2 = np.stack(df.band_2.iloc[start: end])
-    X = np.stack([x1, x2], axis=1)
-    X = np.add(np.multiply(X, 2), -1)
-    batch_dataset = IcebergDataset(X,
-                                   None,
-                                   df.iloc[start: end],
-                                   transform=trs,
-                                   training=False)
-    batch_loader = torch.utils.data.DataLoader(batch_dataset,
-                                               batch_size=32,
-                                               shuffle=False,
-                                               num_workers=4)
-    out = out.append(predict(batch_loader))
 
-final = out['val1']
+dataset = IcebergDataset(X,
+                         None,
+                         ids,
+                         transform=None,
+                         kind='test')
+
+loader = torch.utils.data.DataLoader(dataset,
+                                     batch_size=32,
+                                     shuffle=False,
+                                     num_workers=4)
+
+out = out.append(predict(loader))
+
+final = pd.DataFrame(out['val1'])
 
 lo = final < .002
 final[lo] = .002
@@ -96,4 +79,4 @@ final[lo] = .002
 hi = final > .998
 final[hi] = .998
 
-final.to_csv('preds/nov8_715pm.csv')
+final.to_csv('preds/nov9_2pm.csv')

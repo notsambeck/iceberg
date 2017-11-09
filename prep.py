@@ -15,7 +15,7 @@ import pickle
 import scipy.ndimage.filters as filters
 # from scipy.ndimage import uniform_filter, gaussian_filter
 
-test = False
+test = True
 
 # LOAD DATA
 if test:
@@ -39,26 +39,58 @@ def standardize(arr):
     '''subtract mean and divide by standard dev.'''
     return np.divide(np.subtract(arr, arr.mean()), arr.std())
 
-# stack each channel into  n*h*w
-x1 = np.stack(imdata.band_1)
-x2 = np.stack(imdata.band_2)
 
-x1 = standardize(x1)
-x2 = standardize(x2)
+class Standardizer():
+    '''subtract mu and divide by sigma - provided separately.'''
+    def __init__(self, mu, sigma):
+        self.mu = mu
+        self.sigma = sigma
+        self.epsilon = 1e-3
 
-# normalize imdata also
-imdata['band_1'] = imdata['band_1'].apply(standardize)
-imdata['band_2'] = imdata['band_2'].apply(standardize)
+    def standardize(self, arr):
+        out = np.divide(arr - self.mu, self.sigma)
+        # print('pseudo-standardized; mean is {}'.format(out.mean()))
+        return out
 
 
-def find_brightest_region(im, n=7):
+if not test:
+    # save values for test set
+    with open('data/mu_sigma.pkl', 'wb') as f:
+        pickle.dump(np.stack(imdata.band_1.values.mean()), f)
+        pickle.dump(np.stack(imdata.band_2.values.std()), f)
+        pickle.dump(np.stack(imdata.band_1.values.mean()), f)
+        pickle.dump(np.stack(imdata.band_2.values.std()), f)
+
+    # standardize imdata
+    imdata['band_1'] = imdata['band_1'].apply(standardize)
+    imdata['band_2'] = imdata['band_2'].apply(standardize)
+
+else:
+    # load values from training set
+    with open('data/mu_sigma.pkl', 'rb') as f:
+        mu1 = pickle.load(f)
+        sigma1 = pickle.load(f)
+        mu2 = pickle.load(f)
+        sigma2 = pickle.load(f)
+
+    # standardize
+    s1 = Standardizer(mu1, sigma1)
+    s2 = Standardizer(mu2, sigma2)
+    imdata['band_1'] = imdata['band_1'].apply(s1.standardize)
+    imdata['band_2'] = imdata['band_2'].apply(s2.standardize)
+
+
+def find_brightest_region(image, n=7):
     '''
+    this function has side effects if you do not replace im with a copy!
+    locate bright spots as reference points for other transforms
     args:
         im: image channel
         n:  number of points to check
     returns:
         x, y: element-wise medians of brightest points
     '''
+    im = image.copy()
     shp = im.shape
     xs = []
     ys = []
@@ -73,15 +105,16 @@ def find_brightest_region(im, n=7):
     return mx, my, ([mx, my] in pts)
 
 
-def make_stats_frame():
+def make_stats_frame(imdata=imdata, test=test):
     df = pd.DataFrame()
     df['id'] = imdata.index
+    if not test:
+        df['is_iceberg'] = imdata.is_iceberg
     df.set_index('id', inplace=True)
-    df['is_iceberg'] = imdata.is_iceberg
     df['angle'] = imdata.inc_angle
-    df['pred'] = [None] * len(df)
+    # df['pred'] = [None] * len(df)
 
-    if False:
+    if True:
         # extra per-image stats, unused
         for b in 'band_1', 'band_2':
             df[b + '_max'] = imdata[b].apply(np.max)
@@ -92,10 +125,10 @@ def make_stats_frame():
     df['coords'] = imdata.band_1.apply(find_brightest_region)
     df['x'] = df['coords'].apply(lambda x: int(x[0]))
     df['y'] = df['coords'].apply(lambda x: int(x[1]))
-    safe = df['coords'].apply(lambda x: x[2])
-    print('of 1604, points that were selected:', sum(safe))
+    # safe = df['coords'].apply(lambda x: x[2])
 
     return df
+
 
 if not test:
     df = make_stats_frame()
@@ -111,7 +144,7 @@ print('normalizing / blurring /  building X...')
 def blur_keep_highlight(im_stack, h_size=1, filt=[0, 1, 1]):
     # blur image
     print(im_stack.min())
-    # CAUTION: dim0 is across stacked image
+    # CAUTION: dim0 is across stacked images
     blur = filters.gaussian_filter(im_stack, filt)
     for i in range(len(im_stack)):
         ix, iy = df.x.iloc[i], df.y.iloc[i]
@@ -124,24 +157,80 @@ def blur_keep_highlight(im_stack, h_size=1, filt=[0, 1, 1]):
     return im_stack
 
 
-blur_all = False
+def my_blur(im_stack, filt=[0, 2, 2]):
+    # apply gaussian_filter within image, standardize
+    return standardize(filters.gaussian_filter(im_stack, filt))
 
 
-if blur_all:
-    b1 = blur_keep_highlight(x1, filt=[0, 1, 1])
-    b2 = blur_keep_highlight(x2, filt=[0, 2, 2])
-    b3 = x1 - blur_keep_highlight(x2)
-    b3 = standardize(b3)
-    X = np.stack([b1, b2, b3], axis=1)
-else:
-    b1 = blur_keep_highlight(x1, filt=[0, 2, 2])
-    b2 = blur_keep_highlight(x2, filt=[0, 1, 1])
+def make_image_stacks(start, stop, imdata=imdata, test=test):
+    partial_df = imdata.iloc[start: stop]
+    x1 = np.stack(partial_df.band_1.values)
+    x2 = np.stack(partial_df.band_2.values)
+    b1 = my_blur(x1.copy(), filt=[0, 2, 2])
+    b2 = my_blur(x2.copy(), filt=[0, 1, 1])
     x3 = b1 - b2
     x3 = standardize(x3)
-    X = np.stack([x1, x2, x3], axis=1)
+    if not test:
+        stats_df = make_stats_frame(partial_df)
+        return np.stack([x1, x2, x3], axis=1), stats_df
+    else:
+        return np.stack([x1, x2, x3], axis=1)
 
+
+# run program:
+
+if not test:
+    X, df = make_image_stacks(0, len(imdata))
+
+    print('built train dataset', X.min(), X.max(), X.shape)
+
+    for ch in range(3):
+        print('channel:', ch, '-', X[:, ch].min(), X[:, ch].max())
+
+    # >>> X.shape
+    # (1604, 3, 75, 75)
+
+    print('making, reshaping y...')
+    y = df.is_iceberg.values
+    y.reshape(-1, 1)
+
+    assert X.shape[0] == y.shape[0]
+
+    print('saving X, y to pickle')
+    train = 'data/train_dataset.pkl'
+    with open(train, 'wb') as f:
+        pickle.dump(X, f)
+        pickle.dump(y, f)
+    df_path = 'data/train_normalized_stats.csv'
+    print('writing stats dataframe to csv')
+    df.to_csv(df_path)
+
+else:
+    batches = 1
+    pickle_size = len(imdata) // batches
+
+    for batch in range(batches):
+        X = make_image_stacks(batch * pickle_size,
+                              (batch + 1) * pickle_size)
+
+        print('built partial test dataset', X.min(), X.max(), X.shape)
+
+        for ch in range(3):
+            print('channel:', ch, '-', X[:, ch].min(), X[:, ch].max())
+
+        print('saving X to pickle')
+        test_batch = 'data/test_dataset_{}.pkl'.format(batch)
+        with open(test_batch, 'wb') as f:
+            pickle.dump(X, f)
+        print('done')
+
+        ids = pd.DataFrame(imdata.index)
+        ids.to_csv('data/test_ids_{}.csv'.format(batch))
+
+
+# show sample of X
 for i in range(1, 4):
-    offset = 15
+    offset = 5
     im1 = X[i+offset, 0]
     plt.subplot('33' + str(3*i - 2))
     plt.imshow(Image.fromarray((im1 - im1.min()) * 255
@@ -158,27 +247,3 @@ for i in range(1, 4):
                                / (im2.max() - im2.min())))
 
 plt.show()
-
-print('dataset init:', X.min(), X.max(), X.shape)
-for ch in range(3):
-    print('channel:', ch, '-', X[:, ch].min(), X[:, ch].max())
-
-# >>> X.shape
-# (1604, 3, 75, 75)
-
-print('making, reshaping y...')
-y = df.is_iceberg.values
-y.reshape(-1, 1)
-
-assert X.shape[0] == y.shape[0]
-
-
-if True:
-    print('saving X, y to pickle')
-    train = 'data/train_dataset.pkl'
-    with open(train, 'wb') as f:
-        pickle.dump(X, f)
-        pickle.dump(y, f)
-    df_path = 'data/train_normalized_stats.csv'
-    print('writing stats dataframe to csv')
-    df.to_csv(df_path)

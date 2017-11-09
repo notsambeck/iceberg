@@ -118,14 +118,17 @@ class IcebergDataset(Dataset):
 
                 l = label[0][0]
                 correct = p == l
-                angle = str(self.df.angle.iloc[index])
-                coords = [self.df.x.iloc[index], self.df.y.iloc[index]]
+                if show_coords:
+                    angle = str(self.df.angle.iloc[index])
+                    coords = [self.df.x.iloc[index], self.df.y.iloc[index]]
                 img = np.multiply(arr - arr.min(),
                                   255/(arr.max() - arr.min()))
 
                 axes[row*channels, col].set_title(str(l)+', p=' + str(p))
                 axes[row*channels+1, col].set_title(str(prob))
-                axes[row*channels+2, col].set_title(angle)
+
+                if show_coords:
+                    axes[row*channels+2, col].set_title(angle)
                 '''axes[row*channels+2, col].set_title(' '.join(
                     [str(c) for c in coords]))'''
 
