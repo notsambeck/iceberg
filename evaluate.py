@@ -9,7 +9,7 @@ from torchvision.transforms import Compose
 from torch.autograd import Variable
 import numpy as np
 from net_parameters import IcebergDataset, IceNet
-from ice_transforms import norm1, norm2, blur_dark, center_crop
+from ice_transforms import norm1, norm2, center_crop
 
 
 df = pd.read_json('data/test.json')
@@ -32,7 +32,7 @@ net = torch.load('model/larger_validation')
 _preds = {}
 _probs = {}
 
-trs = Compose([blur_dark, center_crop])
+trs = Compose([center_crop])
 
 
 def predict(loader):
@@ -87,3 +87,13 @@ for b in range(batches):
                                                shuffle=False,
                                                num_workers=4)
     out = out.append(predict(batch_loader))
+
+final = out['val1']
+
+lo = final < .002
+final[lo] = .002
+
+hi = final > .998
+final[hi] = .998
+
+final.to_csv('preds/nov8_715pm.csv')

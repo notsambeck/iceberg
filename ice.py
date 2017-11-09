@@ -165,7 +165,7 @@ dataf.set_index('id', inplace=True)
 assert len(dataf) == X.shape[0]
 
 
-split = 32 * 36
+split = 32 * 48
 
 X_train = X[:split]
 y_train = y[:split]
@@ -215,8 +215,8 @@ def set_rate(rate):
 
 # DEFINE DATASETS
 
-train_trs = af.RandomAffine(rotation_range=10.0,
-                            translation_range=.05,
+train_trs = af.RandomAffine(rotation_range=12.0,
+                            translation_range=.08,
                             zoom_range=[.7, 1.3])
 
 xval_trs = None
@@ -249,7 +249,7 @@ xval2_loader = torch.utils.data.DataLoader(xval2_dataset, batch_size=32,
                                            shuffle=False, num_workers=4)
 
 
-def train(n, path='model/nov8.torch'):
+def train(n, path='model/nov8_tinyval.torch'):
 
     for epoch in range(n):  # loop over the dataset multiple times
 

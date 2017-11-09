@@ -15,9 +15,15 @@ import pickle
 import scipy.ndimage.filters as filters
 # from scipy.ndimage import uniform_filter, gaussian_filter
 
-# LOAD TRAINING DATA
+test = False
 
-imdata = pd.read_json('data/train.json')
+# LOAD DATA
+if test:
+    filepath = 'data/test.json'
+else:
+    filepath = 'data/train.json'
+
+imdata = pd.read_json(filepath)
 
 # id is random; sort by id to randomize data
 imdata.sort_values('id', inplace=True)
@@ -28,20 +34,19 @@ imdata.set_index('id', inplace=True)
 for b in 'band_1', 'band_2':
     imdata[b] = imdata[b].apply(lambda x: np.array(x).reshape(75, 75))
 
-# stack each channel into  n*h*w
-x1 = np.stack(imdata.band_1)
-x2 = np.stack(imdata.band_2)
-
 
 def standardize(arr):
     '''subtract mean and divide by standard dev.'''
     return np.divide(np.subtract(arr, arr.mean()), arr.std())
 
+# stack each channel into  n*h*w
+x1 = np.stack(imdata.band_1)
+x2 = np.stack(imdata.band_2)
 
 x1 = standardize(x1)
 x2 = standardize(x2)
 
-# normalize df
+# normalize imdata also
 imdata['band_1'] = imdata['band_1'].apply(standardize)
 imdata['band_2'] = imdata['band_2'].apply(standardize)
 
@@ -92,8 +97,8 @@ def make_stats_frame():
 
     return df
 
-
-df = make_stats_frame()
+if not test:
+    df = make_stats_frame()
 
 # prep image data for neural net
 # rescale to +/- 1
@@ -101,13 +106,6 @@ df = make_stats_frame()
 
 print('normalizing / blurring /  building X...')
 # X = normalize(np.stack([x1, x2], axis=1))
-
-
-foot = np.array([[[0, 1, 1, 1, 0],
-                  [0, 1, 1, 1, 1],
-                  [1, 1, 1, 1, 1],
-                  [1, 1, 1, 1, 1],
-                  [0, 1, 1, 1, 0]]])
 
 
 def blur_keep_highlight(im_stack, h_size=1, filt=[0, 1, 1]):
