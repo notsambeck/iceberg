@@ -252,7 +252,7 @@ xval2_loader = torch.utils.data.DataLoader(xval2_dataset, batch_size=32,
                                            shuffle=False, num_workers=4)
 
 
-def train(n, path='model/nov8_tinyval.torch'):
+def train(n, path='model/nov9.torch'):
 
     for epoch in range(n):  # loop over the dataset multiple times
 
@@ -264,7 +264,7 @@ def train(n, path='model/nov8_tinyval.torch'):
 
             image = image.cuda().float()
             target = target.view(-1)
-            # print('target:', target.size(), 'image', image.size())
+            # print('target:', target, 'image', image.size())
 
             # wrap them in Variable
             image, target = Variable(image.cuda()), Variable(target.cuda())
@@ -314,14 +314,16 @@ def train(n, path='model/nov8_tinyval.torch'):
                 total += len(preds)
 
                 # print statistics
-                val_loss += loss.data[0]
+                val_loss += loss.data[0] * len(target)
+
+            val_loss = val_loss / len(y_test)
 
             print('val: loss: {:.3}  accuracy: {} of {}'.format(
-                  val_loss / i, correct.data.cpu().numpy(), total))
+                  val_loss, correct.data.cpu().numpy(), total))
 
-            if val_loss / i < net.best_xval_loss:
+            if val_loss < net.best_xval_loss:
                 print('Save. #save')
-                net.best_xval_loss = val_loss / i
+                net.best_xval_loss = val_loss
                 torch.save(net, path)
 
             val_loss = 0.0
@@ -350,10 +352,12 @@ def train(n, path='model/nov8_tinyval.torch'):
                 total += len(preds)
 
                 # print statistics
-                val_loss += loss.data[0]
+                val_loss += loss.data[0] * len(target)
 
-            print('val with transform: loss: {:.3}  accuracy: {} of {}'.format(
-                  val_loss / i, correct.data.cpu().numpy(), total))
+            val_loss /= len(y_test)
+
+            print('with transform loss: {:.3}  accuracy: {} of {}'.format(
+                  val_loss, correct.data.cpu().numpy(), total))
 
     print('Finished Training')
 

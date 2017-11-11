@@ -24,6 +24,7 @@ else:
     filepath = 'data/train.json'
 
 imdata = pd.read_json(filepath)
+print(imdata.head())
 
 # id is random; sort by id to randomize data
 imdata.sort_values('id', inplace=True)
@@ -61,23 +62,19 @@ if not test:
         pickle.dump(np.stack(imdata.band_1.values.mean()), f)
         pickle.dump(np.stack(imdata.band_2.values.std()), f)
 
-    # standardize imdata
-    imdata['band_1'] = imdata['band_1'].apply(standardize)
-    imdata['band_2'] = imdata['band_2'].apply(standardize)
 
-else:
-    # load values from training set
-    with open('data/mu_sigma.pkl', 'rb') as f:
-        mu1 = pickle.load(f)
-        sigma1 = pickle.load(f)
-        mu2 = pickle.load(f)
-        sigma2 = pickle.load(f)
+# load values from training set
+with open('data/mu_sigma.pkl', 'rb') as f:
+    mu1 = pickle.load(f)
+    sigma1 = pickle.load(f)
+    mu2 = pickle.load(f)
+    sigma2 = pickle.load(f)
 
-    # standardize
-    s1 = Standardizer(mu1, sigma1)
-    s2 = Standardizer(mu2, sigma2)
-    imdata['band_1'] = imdata['band_1'].apply(s1.standardize)
-    imdata['band_2'] = imdata['band_2'].apply(s2.standardize)
+# standardize
+s1 = Standardizer(mu1, sigma1)
+s2 = Standardizer(mu2, sigma2)
+imdata['band_1'] = imdata['band_1'].apply(s1.standardize)
+imdata['band_2'] = imdata['band_2'].apply(s2.standardize)
 
 
 def find_brightest_region(image, n=7):
@@ -108,9 +105,10 @@ def find_brightest_region(image, n=7):
 def make_stats_frame(imdata=imdata, test=test):
     df = pd.DataFrame()
     df['id'] = imdata.index
-    if not test:
-        df['is_iceberg'] = imdata.is_iceberg
     df.set_index('id', inplace=True)
+    if not test:
+        print('not test, including y in df')
+        df['is_iceberg'] = imdata.is_iceberg
     df['angle'] = imdata.inc_angle
     # df['pred'] = [None] * len(df)
 
@@ -128,13 +126,6 @@ def make_stats_frame(imdata=imdata, test=test):
     # safe = df['coords'].apply(lambda x: x[2])
 
     return df
-
-
-if not test:
-    df = make_stats_frame()
-
-# prep image data for neural net
-# rescale to +/- 1
 
 
 print('normalizing / blurring /  building X...')
@@ -166,9 +157,10 @@ def make_image_stacks(start, stop, imdata=imdata, test=test):
     partial_df = imdata.iloc[start: stop]
     x1 = np.stack(partial_df.band_1.values)
     x2 = np.stack(partial_df.band_2.values)
-    b1 = my_blur(x1.copy(), filt=[0, 2, 2])
-    b2 = my_blur(x2.copy(), filt=[0, 1, 1])
-    x3 = b1 - b2
+    # b1 = my_blur(x1.copy(), filt=[0, 1, 1])
+    # b2 = my_blur(x2.copy(), filt=[0, 1, 1])
+    # x3 = (b1 - b1.min()) * (b2 - b2.min())
+    x3 = (x1 - x1.min()) * (x2 - x2.min())
     x3 = standardize(x3)
     if not test:
         stats_df = make_stats_frame(partial_df)

@@ -17,7 +17,7 @@ with open('data/test_dataset_X.pkl', 'rb') as f:
     X = pickle.load(f)
 
 net = IceNet(3)
-net = torch.load('model/nov8_tinyval.torch')
+net = torch.load('model/nov9.torch')
 
 _preds = {}
 _probs = {}

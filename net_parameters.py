@@ -7,9 +7,9 @@ class IceNet(nn.Module):
     def __init__(self, channels):
         super(IceNet, self).__init__()
         self.pool = nn.MaxPool2d(2, 2)           # pool is not a layer
-        self.conv1 = nn.Conv2d(channels, 24, 3)  # 60 > 58
+        self.conv1 = nn.Conv2d(channels, 32, 3)  # 60 > 58
         self.drop0 = nn.Dropout2d()               # NC
-        self.conv2 = nn.Conv2d(24, 64, 3)         # 26 -> 24 ->12
+        self.conv2 = nn.Conv2d(32, 64, 3)         # 26 -> 24 ->12
         self.drop1 = nn.Dropout2d()               # NC
         self.conv3 = nn.Conv2d(64, 128, 3)         # 12 -> 10 -> 5
         self.drop2 = nn.Dropout2d()
