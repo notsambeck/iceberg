@@ -1,3 +1,4 @@
 data/*.json
 data/*.pkl
+.idea
 __*
