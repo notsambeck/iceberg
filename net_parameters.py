@@ -17,6 +17,7 @@ class IceNet(nn.Module):
         self.drop_fc = nn.Dropout()
         self.fc2 = nn.Linear(256, 128)
         self.fc3 = nn.Linear(128, 2)
+        self.out = nn.LogSoftmax()
         self.best_xval_loss = 10
         self.training = True
 
@@ -46,6 +47,7 @@ class IceNet(nn.Module):
         x = F.dropout(x, training=self.training)
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
+        x = self.out(x)
         return x
 
 

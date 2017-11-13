@@ -67,40 +67,46 @@ def find_brightest_region(image, n=7):
         pts.append([bright_x, bright_y])
     mx, my = np.median(xs), np.median(ys)
 
-    return mx, my, ([mx, my] in pts)
+    return mx, my
 
 
-def make_stats_frame(data, is_test_set=False, include_all_data=False):
+def make_stats_frame(input_data, is_test_set=False, include_all_data=False):
     """
     make a stats dataframe; includes index, inc_angle, coordinates of highlight
     if is_test_set, also includes y as column is_iceberg
     if include_all_data, includes stats on each image
     """
     stats_df = pd.DataFrame()
-    stats_df['id'] = data.index
-    stats_df.set_index('id', inplace=True)
+    stats_df['id'] = input_data.index
+    stats_df.set_index('id', inplace=True, drop=False)
     if not is_test_set:
-        print('not test_set, therefore including y in stats_df')
-        stats_df['is_iceberg'] = data.is_iceberg
-    stats_df['inc_angle'] = data.inc_angle
+        print('not test_set; including y in stats_df')
+        stats_df['is_iceberg'] = input_data.is_iceberg
+    else:
+        print('test_set; therefore including y=test in df')
+        stats_df['is_iceberg'] = ['test' for _ in stats_df]
+
+    stats_df['predicted'] = None
+    stats_df['prob'] = None
+
+    stats_df['inc_angle'] = input_data.inc_angle
     # df['predicted'] = [None] * len(df)
 
     if include_all_data:
-        # extra per-image stats, unused
+        # extra per-image stats, currently unused
         for band in 'band_1', 'band_2':
-            stats_df[band + '_max'] = data[band].apply(np.max)
-            stats_df[band + '_min'] = data[band].apply(np.min)
-            stats_df[band + '_mean'] = data[band].apply(np.mean)
-            stats_df[band + '_median'] = data[band].apply(np.median)
+            stats_df[band + '_max'] = input_data[band].apply(np.max)
+            stats_df[band + '_min'] = input_data[band].apply(np.min)
+            stats_df[band + '_mean'] = input_data[band].apply(np.mean)
+            stats_df[band + '_median'] = input_data[band].apply(np.median)
 
-    stats_df['highlight'] = data.band_1.apply(find_brightest_region)
-    stats_df['hl_x'] = stats_df['highlight'].apply(lambda x: int(x[0]))
-    stats_df['hl_y'] = stats_df['highlight'].apply(lambda x: int(x[1]))
+    # generate data about where brightest band_1 pixels are
+    stats_df['highlight'] = input_data.band_1.apply(find_brightest_region)
 
     return stats_df
 
 
-def blur_keep_highlight(im_stack, h_size=1, fltr=None):
+def blur_image_keep_highlight_region(im_stack, im_data, fltr, h_size=0):
     # blur image
     if fltr is None:
         fltr = [0, 1, 1]
@@ -109,7 +115,7 @@ def blur_keep_highlight(im_stack, h_size=1, fltr=None):
     # CAUTION: dim0 is across stacked images
     blur = filters.gaussian_filter(im_stack, fltr)
     for i in range(len(im_stack)):
-        ix, iy = df.x.iloc[i], df.y.iloc[i]
+        ix, iy = im_data.hl_x.iloc[i], im_data.hl_y.iloc[i]
         a, b, c, d = ix-h_size, ix+h_size, iy-h_size, iy+h_size
         blur[i, a:b, c:d] = np.maximum(im_stack[i, a:b, c:d],
                                        blur[i, a:b, c:d])
@@ -164,7 +170,7 @@ def show_sample(image_stack):
 if __name__ == '__main__':
 
     # use test or training file
-    test = True
+    test = False
 
     # load data
     if test:
@@ -218,22 +224,19 @@ if __name__ == '__main__':
         print('writing X to pickle...')
         pickle.dump(X, f)
 
-        if test:
-            print('training: saving y to pickle...')
-            y = df.is_iceberg.values
-            y.reshape(-1, 1)
-            assert X.shape[0] == y.shape[0]
-            pickle.dump(y, f)
-        else:
-            print('test, not saving y')
+    # delete most of X for memory... does this work?
+    print('deleting mad Xs')
+    X = X[:100]
 
     if test:
         df_path = 'data/test_normalized_stats.csv'
     else:
         df_path = 'data/train_normalized_stats.csv'
 
-    print('writing stats dataframe to csv')
+    print('making basic stats dataframe, writing to csv...')
     stats_about_X = make_stats_frame(input_df, is_test_set=test)
     stats_about_X.to_csv(df_path)
+
+    print('display sample images')
 
     show_sample(X)
